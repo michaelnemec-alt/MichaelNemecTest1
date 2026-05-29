@@ -1,18 +1,18 @@
 # UNIFY PIVOT Ready
 
-Multi-page Streamlit app pro AutoStore analytiku.
+Multi-page Streamlit app for AutoStore analytics.
 
-## Stránky
+## Pages
 
 ### Prio vs Picking
-Scatter plot vizualizace včasnosti pickování na AutoStore (AS91 / AS92).
+Scatter plot visualization of picking timeliness on AutoStore (AS91 / AS92).
 
 ### UNIFY Pivot Ready
-Konverze Unify Analytics / CubeAnalytics CSV exportů do pivot-ready long format CSV pro Google Sheets.
+Convert Unify Analytics / CubeAnalytics CSV exports into pivot-ready long format CSV for Google Sheets.
 
-## Jak použít
+## How to use
 
-1. Otevři app
-2. Vyber stránku v levém panelu
-3. Nahraj CSV soubor(y)
-4. Výsledky se zobrazí automaticky + tlačítka pro stažení
+1. Open the app
+2. Select a page from the left panel
+3. Upload CSV file(s)
+4. Results are displayed automatically + download buttons available
