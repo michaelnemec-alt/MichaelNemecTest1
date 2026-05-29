@@ -12,7 +12,7 @@ st.set_page_config(
 
 st.title("🔄 UNIFY Pivot Ready")
 st.markdown(
-    "Konverze Unify Analytics / CubeAnalytics CSV exportů do **pivot-ready long format** CSV."
+    "Convert Unify Analytics / CubeAnalytics CSV exports into **pivot-ready long format** CSV."
 )
 
 
@@ -33,7 +33,7 @@ def process_file(raw_bytes, filename):
                  "Average bin wait time", "Average operator handling time"]
     missing = [c for c in required if c not in df.columns]
     if missing:
-        return None, f"Chybějící sloupce: {missing}"
+        return None, f"Missing columns: {missing}"
 
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
     df = df.dropna(subset=["Timestamp"])
@@ -100,50 +100,50 @@ def process_file(raw_bytes, filename):
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("⚙️ Nastavení")
+    st.header("⚙️ Settings")
     uploaded_files = st.file_uploader(
-        "Nahraj CSV soubory",
+        "Upload CSV files",
         type=["csv"],
         accept_multiple_files=True,
-        help="Unify Analytics / CubeAnalytics CSV exporty. Lze nahrát více souborů najednou.",
+        help="Unify Analytics / CubeAnalytics CSV exports. You can upload multiple files at once.",
     )
     st.divider()
     st.markdown(
-        "**Požadované sloupce:**\n"
+        "**Required columns:**\n"
         "- `Timestamp`\n"
         "- `Port ID`\n"
         "- `Pick type`\n"
         "- `Count`\n"
         "- `Average bin wait time`\n"
         "- `Average operator handling time`\n"
-        "\n*Volitelně:* `Category`"
+        "\n*Optional:* `Category`"
     )
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
 if not uploaded_files:
-    st.info("👈 Nahraj CSV soubor(y) v levém panelu pro začátek.")
+    st.info("👈 Upload CSV file(s) in the left panel to get started.")
     st.markdown(
         """
         ---
-        ### Jak to funguje
+        ### How it works
 
-        1. Nahraj jeden nebo více CSV souborů z Unify Analytics / CubeAnalytics
-        2. Každý soubor se zpracuje **nezávisle** (nikdy se neslučují)
-        3. Stáhni výstupní pivot-ready CSV pro import do Google Sheets
+        1. Upload one or more CSV files from Unify Analytics / CubeAnalytics
+        2. Each file is processed **independently** (files are never merged)
+        3. Download the output pivot-ready CSV for import into Google Sheets
 
-        ### Zpracování zahrnuje
-        - Extrakce Date + Hour z Timestamp
-        - Groupování: Date × Hour × Pick type × Port ID × Category
-        - **Weighted averages** pro bin wait time a operator handling time
-        - Odhad **Average open ports** = (bin_wait + op_handling) × Count / 3600
-        - Řádky s Count = 0 jsou vyloučeny
+        ### Processing includes
+        - Extract Date + Hour from Timestamp
+        - Group by: Date × Hour × Pick type × Port ID × Category
+        - **Weighted averages** for bin wait time and operator handling time
+        - Estimate **Average open ports** = (bin_wait + op_handling) × Count / 3600
+        - Rows with Count = 0 are excluded
         """
     )
     st.stop()
 
 # Process each file
-st.markdown(f"**Nahráno souborů: {len(uploaded_files)}**")
+st.markdown(f"**Files uploaded: {len(uploaded_files)}**")
 st.divider()
 
 for i, uploaded_file in enumerate(uploaded_files):
@@ -154,25 +154,25 @@ for i, uploaded_file in enumerate(uploaded_files):
         result, error = process_file(raw, uploaded_file.name)
 
         if error:
-            st.error(f"Chyba: {error}")
+            st.error(f"Error: {error}")
             continue
 
         # Stats
         col1, col2, col3, col4 = st.columns(4)
         dates = result["Date"].unique()
-        col1.metric("Řádků", f"{len(result):,}")
-        col2.metric("Dnů", len(dates))
-        col3.metric("Portů", result["Port number"].nunique())
-        col4.metric("Pick typů", result["Pick type"].nunique())
+        col1.metric("Rows", f"{len(result):,}")
+        col2.metric("Days", len(dates))
+        col3.metric("Ports", result["Port number"].nunique())
+        col4.metric("Pick types", result["Pick type"].nunique())
 
         # Preview
-        st.markdown("**Náhled (prvních 20 řádků):**")
+        st.markdown("**Preview (first 20 rows):**")
         st.dataframe(result.head(20), use_container_width=True)
 
         # Download
         csv_bytes = result.to_csv(index=False).encode("utf-8")
         st.download_button(
-            f"⬇️ Stáhnout {output_name}",
+            f"⬇️ Download {output_name}",
             data=csv_bytes,
             file_name=output_name,
             mime="text/csv",
