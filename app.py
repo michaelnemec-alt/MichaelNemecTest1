@@ -56,3 +56,11 @@ with col2:
         """,
         unsafe_allow_html=True,
     )
+
+st.markdown("---")
+st.markdown(
+    "<div style='text-align:center; color:#888; font-size:0.85em;'>"
+    "Created by <strong>Michael Nemec</strong>"
+    "</div>",
+    unsafe_allow_html=True,
+)
