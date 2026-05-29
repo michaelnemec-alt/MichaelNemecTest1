@@ -14,24 +14,24 @@ st.set_page_config(
 # ── Header ──────────────────────────────────────────────────────────────────
 st.title("📊 Prio Time vs Picking Finished At")
 st.markdown(
-    "Scatter plot zobrazující, zda byly objednávky na AutoStore "
-    "vypickované **včas** nebo **pozdě** vzhledem k prioritizačnímu času."
+    "Scatter plot showing whether AutoStore orders were picked "
+    "**on time** or **late** relative to the prioritization time."
 )
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.header("⚙️ Nastavení")
+    st.header("⚙️ Settings")
     uploaded_file = st.file_uploader(
-        "Nahraj CSV soubor",
+        "Upload CSV file",
         type=["csv"],
-        help="CSV oddělené středníkem (;) s order-level / pick-task-level exportem",
+        help="Semicolon-delimited (;) CSV with order-level / pick-task-level export",
     )
     st.divider()
-    show_comparison = st.checkbox("Zobrazit porovnání AS91 vs AS92", value=True)
-    show_hourly = st.checkbox("Zobrazit hodinovou distribuci", value=True)
+    show_comparison = st.checkbox("Show AS91 vs AS92 comparison", value=True)
+    show_hourly = st.checkbox("Show hourly distribution", value=True)
     st.divider()
     st.markdown(
-        "**Požadované sloupce:**\n"
+        "**Required columns:**\n"
         "- `AutoStore`\n"
         "- `Type`\n"
         "- `Prioritization Time`\n"
@@ -98,13 +98,13 @@ def compute_stats(data):
     on_time = len(data[data["diff_minutes"] >= 0])
     late = total - on_time
     return {
-        "Celkem": total,
+        "Total": total,
         "On Time": on_time,
         "On Time %": round(on_time / total * 100, 1),
         "Late": late,
         "Late %": round(late / total * 100, 1),
-        "Medián (min)": round(data["diff_minutes"].median(), 1),
-        "Průměr (min)": round(data["diff_minutes"].mean(), 1),
+        "Median (min)": round(data["diff_minutes"].median(), 1),
+        "Mean (min)": round(data["diff_minutes"].mean(), 1),
         "Max early (min)": round(data["diff_minutes"].max(), 1),
         "Max late (min)": round(data["diff_minutes"].min(), 1),
     }
@@ -119,14 +119,14 @@ def fig_to_bytes(fig):
 
 # ── Main ────────────────────────────────────────────────────────────────────
 if uploaded_file is None:
-    st.info("👈 Nahraj CSV soubor v levém panelu pro začátek.")
+    st.info("👈 Upload a CSV file in the left panel to get started.")
     st.stop()
 
 # Load data
 try:
     df_raw = pd.read_csv(uploaded_file, sep=";")
 except Exception as e:
-    st.error(f"Chyba při čtení CSV: {e}\n\nZkontroluj, že soubor je oddělený středníkem (;)")
+    st.error(f"Error reading CSV: {e}\n\nMake sure the file is semicolon-delimited (;)")
     st.stop()
 
 # Validate columns
@@ -134,8 +134,8 @@ required = ["AutoStore", "Type", "Prioritization Time", "Finished Picking At"]
 missing = [c for c in required if c not in df_raw.columns]
 if missing:
     st.error(
-        f"Chybějící sloupce: **{missing}**\n\n"
-        "Použij order-level / pick-task-level export (ne detail-level)."
+        f"Missing columns: **{missing}**\n\n"
+        "Please use an order-level / pick-task-level export (not detail-level)."
     )
     st.stop()
 
@@ -161,7 +161,7 @@ date_range = (
 # ── Info bar ────────────────────────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Warehouse", warehouse)
-col2.metric("Datum", date_range)
+col2.metric("Date", date_range)
 col3.metric("AutoStore 91", f"{len(df_91):,}")
 col4.metric("AutoStore 92", f"{len(df_92):,}")
 
@@ -173,25 +173,25 @@ stats_91 = compute_stats(df_91)
 
 if stats_91:
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Celkem", f"{stats_91['Celkem']:,}")
+    c1.metric("Total", f"{stats_91['Total']:,}")
     pct_91 = stats_91["On Time %"]
     c2.metric("On Time", f"{pct_91}%", delta=None)
     c3.metric("Late", f"{stats_91['Late %']}%")
-    c4.metric("Medián", f"{stats_91['Medián (min)']} min")
-    c5.metric("Průměr", f"{stats_91['Průměr (min)']} min")
+    c4.metric("Median", f"{stats_91['Median (min)']} min")
+    c5.metric("Mean", f"{stats_91['Mean (min)']} min")
 
     fig_91 = generate_chart(df_91, 91, warehouse)
     st.pyplot(fig_91)
 
     st.download_button(
-        "⬇️ Stáhnout PNG — AutoStore 91",
+        "⬇️ Download PNG — AutoStore 91",
         data=fig_to_bytes(fig_91),
         file_name=f"prio_vs_picking_{warehouse}_autostore_91.png",
         mime="image/png",
     )
     plt.close(fig_91)
 else:
-    st.warning("Žádná data pro AutoStore 91")
+    st.warning("No data for AutoStore 91")
 
 st.divider()
 
@@ -201,29 +201,29 @@ stats_92 = compute_stats(df_92)
 
 if stats_92:
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Celkem", f"{stats_92['Celkem']:,}")
+    c1.metric("Total", f"{stats_92['Total']:,}")
     c2.metric("On Time", f"{stats_92['On Time %']}%")
     c3.metric("Late", f"{stats_92['Late %']}%")
-    c4.metric("Medián", f"{stats_92['Medián (min)']} min")
-    c5.metric("Průměr", f"{stats_92['Průměr (min)']} min")
+    c4.metric("Median", f"{stats_92['Median (min)']} min")
+    c5.metric("Mean", f"{stats_92['Mean (min)']} min")
 
     fig_92 = generate_chart(df_92, 92, warehouse)
     st.pyplot(fig_92)
 
     st.download_button(
-        "⬇️ Stáhnout PNG — AutoStore 92",
+        "⬇️ Download PNG — AutoStore 92",
         data=fig_to_bytes(fig_92),
         file_name=f"prio_vs_picking_{warehouse}_autostore_92.png",
         mime="image/png",
     )
     plt.close(fig_92)
 else:
-    st.warning("Žádná data pro AutoStore 92")
+    st.warning("No data for AutoStore 92")
 
 # ── Comparison table ────────────────────────────────────────────────────────
 if show_comparison and stats_91 and stats_92:
     st.divider()
-    st.header("Porovnání AS91 vs AS92")
+    st.header("AS91 vs AS92 Comparison")
     comp = pd.DataFrame(
         {"AutoStore 91": stats_91, "AutoStore 92": stats_92}
     ).T
@@ -232,7 +232,7 @@ if show_comparison and stats_91 and stats_92:
 # ── Hourly distribution ────────────────────────────────────────────────────
 if show_hourly:
     st.divider()
-    st.header("Hodinová distribuce pick tasků")
+    st.header("Hourly Pick Task Distribution")
 
     df["hour"] = df["Finished Picking At"].dt.hour
     hourly = (
@@ -246,15 +246,15 @@ if show_hourly:
 
     hourly.plot(kind="bar", ax=ax1, color=["#1f77b4", "#ff7f0e"])
     ax1.set_title(f"Pick Tasks per Hour — {warehouse}", fontsize=14, fontweight="bold")
-    ax1.set_xlabel("Hodina")
-    ax1.set_ylabel("Počet")
+    ax1.set_xlabel("Hour")
+    ax1.set_ylabel("Count")
     ax1.grid(axis="y", alpha=0.3)
 
     hourly_pct = hourly.div(hourly.sum(axis=1), axis=0) * 100
     hourly_pct.plot(kind="bar", stacked=True, ax=ax2, color=["#1f77b4", "#ff7f0e"])
     ax2.set_title(f"AutoStore Share per Hour — {warehouse}", fontsize=14, fontweight="bold")
-    ax2.set_xlabel("Hodina")
-    ax2.set_ylabel("Podíl (%)")
+    ax2.set_xlabel("Hour")
+    ax2.set_ylabel("Share (%)")
     ax2.set_ylim(0, 100)
     ax2.grid(axis="y", alpha=0.3)
 
@@ -262,7 +262,7 @@ if show_hourly:
     st.pyplot(fig_h)
 
     st.download_button(
-        "⬇️ Stáhnout PNG — Hodinová distribuce",
+        "⬇️ Download PNG — Hourly Distribution",
         data=fig_to_bytes(fig_h),
         file_name=f"hourly_distribution_{warehouse}.png",
         mime="image/png",
