@@ -11,14 +11,14 @@ st.markdown("---")
 
 st.markdown(
     """
-    ### Vítej v UNIFY PIVOT Ready!
+    ### Welcome to UNIFY PIVOT Ready!
 
-    Vyber analýzu v **levém panelu**:
+    Select an analysis from the **left panel**:
 
-    | Stránka | Popis |
-    |---------|-------|
-    | **Prio vs Picking** | Scatter plot včasnosti pickování vs prioritizační čas |
-    | **UNIFY Pivot Ready** | Konverze Unify/CubeAnalytics CSV do pivot-ready formátu |
+    | Page | Description |
+    |------|-------------|
+    | **Prio vs Picking** | Scatter plot of picking timeliness vs prioritization time |
+    | **UNIFY Pivot Ready** | Convert Unify/CubeAnalytics CSV to pivot-ready format |
     """
 )
 
@@ -29,12 +29,12 @@ with col1:
         """
         <div style="background:#e3f2fd; border-radius:12px; padding:24px; min-height:180px">
             <h3>📈 Prio vs Picking</h3>
-            <p>Jsou objednávky pickované včas?</p>
+            <p>Are orders picked on time?</p>
             <ul>
-                <li>Scatter ploty AS91 + AS92</li>
-                <li>On-time / Late statistiky</li>
-                <li>Hodinová distribuce</li>
-                <li>Stažení PNG</li>
+                <li>Scatter plots AS91 + AS92</li>
+                <li>On-time / Late statistics</li>
+                <li>Hourly distribution</li>
+                <li>PNG download</li>
             </ul>
         </div>
         """,
@@ -46,11 +46,11 @@ with col2:
         """
         <div style="background:#fff3e0; border-radius:12px; padding:24px; min-height:180px">
             <h3>🔄 UNIFY Pivot Ready</h3>
-            <p>Konverze CSV do pivot-ready formátu</p>
+            <p>Convert CSV to pivot-ready format</p>
             <ul>
-                <li>Upload více souborů najednou</li>
+                <li>Upload multiple files at once</li>
                 <li>Weighted averages & open ports</li>
-                <li>Stažení výstupních CSV</li>
+                <li>Download output CSV files</li>
             </ul>
         </div>
         """,
