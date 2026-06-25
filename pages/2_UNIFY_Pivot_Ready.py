@@ -73,11 +73,11 @@ def process_file(raw_bytes, filename):
     agg["Average bin wait time"] = agg["_w_bin_wait"] / agg["Count"]
     agg["Average operator handling time"] = agg["_w_op_handling"] / agg["Count"]
 
-    # Average open ports estimate
+    # Average open ports estimate (capped at 1 — one port cannot be more than fully open)
     agg["Average open ports"] = (
         (agg["Average bin wait time"] + agg["Average operator handling time"])
         * agg["Count"] / 3600
-    )
+    ).clip(upper=1)
 
     # Step 5 — Sort
     agg = agg.sort_values(["Date", "Hour", "Pick type", "Port ID", "Category"])
@@ -136,7 +136,7 @@ if not uploaded_files:
         - Extract Date + Hour from Timestamp
         - Group by: Date × Hour × Pick type × Port ID × Category
         - **Weighted averages** for bin wait time and operator handling time
-        - Estimate **Average open ports** = (bin_wait + op_handling) × Count / 3600
+        - Estimate **Average open ports** = (bin_wait + op_handling) × Count / 3600 (capped at 1)
         - Rows with Count = 0 are excluded
         """
     )
