@@ -55,7 +55,7 @@ with st.sidebar:
 
 
 # ── Chart function ──────────────────────────────────────────────────────────
-def generate_chart(data, autostore_num, warehouse_name, plan_pct=None, time_shift_h=3):
+def generate_chart(data, autostore_num, warehouse_name, plan_pct=None, time_shift_h=3, full_data=None):
     fig, ax = plt.subplots(figsize=(24, 10), dpi=150)
     ax.set_facecolor("#f8f8f8")
     fig.patch.set_facecolor("white")
@@ -125,16 +125,19 @@ def generate_chart(data, autostore_num, warehouse_name, plan_pct=None, time_shif
         x_times = [base_date + pd.Timedelta(hours=float(h)) for h in shifted_hours]
 
         # Target date = the date shown on the chart (Finished Picking At date)
-        target_date = base_date.date()
+        chart_target_date = base_date.date()
+
+        # Use full_data (all days) to capture pre-picks from day before
+        overlay_src = full_data if full_data is not None else data
 
         # All orders with Prioritization Time on target date (includes pre-picks from day before)
-        all_for_target = data[data["Prioritization Time"].dt.date == target_date]
+        all_for_target = overlay_src[overlay_src["Prioritization Time"].dt.date == chart_target_date]
         all_prio_counts = all_for_target.groupby("prio_hour").size()
         all_total = all_prio_counts.sum()
 
         # Same-day only: prio date = target AND finished date = target
         sameday_for_target = all_for_target[
-            all_for_target["Finished Picking At"].dt.date == target_date
+            all_for_target["Finished Picking At"].dt.date == chart_target_date
         ]
         sameday_prio_counts = sameday_for_target.groupby("prio_hour").size()
         sameday_total = all_total  # normalize both to same total for comparison
@@ -262,15 +265,18 @@ date_range = (
 
 # ── Parse plan file (optional) — convert to % shape ─────────────────────────
 plan_pct = None
+target_date = None
 if plan_file is not None:
     try:
         plan_raw = pd.read_csv(plan_file, sep=";")
         plan_raw["parsed_date"] = pd.to_datetime(
             plan_raw["Date"].str.extract(r"(\w+ \w+ \d+ \d+)")[0], format="%a %b %d %Y"
         )
-        pick_date = dates.min()
+        available_dates = sorted(df["Finished Picking At"].dt.date.unique())
+        pick_date = available_dates[-1]  # latest date = target day
         plan_day = plan_raw[plan_raw["parsed_date"].dt.date == pick_date]
         if not plan_day.empty:
+            target_date = pick_date
             row = plan_day.iloc[0]
             plan_rows = []
             for h in range(3, 23):
@@ -286,24 +292,32 @@ if plan_file is not None:
             else:
                 plan_df["plan_pct"] = 0.0
             plan_pct = plan_df[["hour", "plan_pct"]]
-            st.success(f"Plan file loaded for {pick_date} — shape overlay enabled (shift: -{time_shift}h)")
+            st.success(f"Plan file loaded for **{pick_date}** — shape overlay enabled (shift: -{time_shift}h)")
         else:
             st.warning(f"Plan file has no data for {pick_date}")
     except Exception as e:
         st.warning(f"Could not parse plan file: {e}")
 
+# When plan is loaded, filter scatter to target day only
+if target_date is not None:
+    df_91_scatter = df_91[df_91["Finished Picking At"].dt.date == target_date].copy()
+    df_92_scatter = df_92[df_92["Finished Picking At"].dt.date == target_date].copy()
+else:
+    df_91_scatter = df_91
+    df_92_scatter = df_92
+
 # ── Info bar ────────────────────────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Warehouse", warehouse)
-col2.metric("Date", date_range)
-col3.metric("AutoStore 91", f"{len(df_91):,}")
-col4.metric("AutoStore 92", f"{len(df_92):,}")
+col2.metric("Date", str(target_date) if target_date else date_range)
+col3.metric("AutoStore 91", f"{len(df_91_scatter):,}")
+col4.metric("AutoStore 92", f"{len(df_92_scatter):,}")
 
 st.divider()
 
 # ── AutoStore 91 ────────────────────────────────────────────────────────────
 st.header("AutoStore 91")
-stats_91 = compute_stats(df_91)
+stats_91 = compute_stats(df_91_scatter)
 
 if stats_91:
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -314,7 +328,7 @@ if stats_91:
     c5.metric("Late", f"{stats_91['Late %']}%")
     c6.metric("Median", f"{stats_91['Median same-day (min)']} min")
 
-    fig_91 = generate_chart(df_91, 91, warehouse, plan_pct=plan_pct, time_shift_h=time_shift)
+    fig_91 = generate_chart(df_91_scatter, 91, warehouse, plan_pct=plan_pct, time_shift_h=time_shift, full_data=df_91)
     st.pyplot(fig_91)
 
     st.download_button(
@@ -331,7 +345,7 @@ st.divider()
 
 # ── AutoStore 92 ────────────────────────────────────────────────────────────
 st.header("AutoStore 92")
-stats_92 = compute_stats(df_92)
+stats_92 = compute_stats(df_92_scatter)
 
 if stats_92:
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -342,7 +356,7 @@ if stats_92:
     c5.metric("Late", f"{stats_92['Late %']}%")
     c6.metric("Median", f"{stats_92['Median same-day (min)']} min")
 
-    fig_92 = generate_chart(df_92, 92, warehouse, plan_pct=plan_pct, time_shift_h=time_shift)
+    fig_92 = generate_chart(df_92_scatter, 92, warehouse, plan_pct=plan_pct, time_shift_h=time_shift, full_data=df_92)
     st.pyplot(fig_92)
 
     st.download_button(
