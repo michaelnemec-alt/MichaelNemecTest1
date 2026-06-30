@@ -222,6 +222,7 @@ df["diff_minutes"] = (
     (df["Prioritization Time"] - df["Finished Picking At"]).dt.total_seconds() / 60
 )
 df["is_next_day"] = df["Prioritization Time"].dt.date > df["Finished Picking At"].dt.date
+df["prio_hour"] = df["Prioritization Time"].dt.hour
 
 df_91 = df[df["AutoStore"].str.contains(".91", regex=False)].copy()
 df_92 = df[df["AutoStore"].str.contains(".92", regex=False)].copy()
@@ -232,9 +233,6 @@ dates = df["Finished Picking At"].dt.date
 date_range = (
     f"{dates.min()} – {dates.max()}" if dates.min() != dates.max() else str(dates.min())
 )
-
-# ── Compute prio_hour for overlay ────────────────────────────────────────────
-df["prio_hour"] = df["Prioritization Time"].dt.hour
 
 # ── Parse plan file (optional) — convert to % shape ─────────────────────────
 plan_pct = None
