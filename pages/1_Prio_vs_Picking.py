@@ -46,16 +46,21 @@ def generate_chart(data, autostore_num, warehouse_name):
     fig.patch.set_facecolor("white")
     ax.grid(True, alpha=0.3, color="#cccccc")
 
-    on_time = data[data["diff_minutes"] >= 0]
     late = data[data["diff_minutes"] < 0]
-    total = len(on_time) + len(late)
-    on_pct = (len(on_time) / total * 100) if total > 0 else 0
+    std_on = data[(data["diff_minutes"] >= 0) & (data["Type"] == "STANDARD")]
+    exp_on = data[(data["diff_minutes"] >= 0) & (data["Type"] == "EXPRESS")]
+    total = len(data)
     late_pct = (len(late) / total * 100) if total > 0 else 0
 
     ax.scatter(
-        on_time["Finished Picking At"], on_time["diff_minutes"],
+        std_on["Finished Picking At"], std_on["diff_minutes"],
         c="#1f77b4", s=6, alpha=0.45,
-        label=f"On time ({len(on_time):,} orders, {on_pct:.1f}%)",
+        label=f"STANDARD on time ({len(std_on):,})",
+    )
+    ax.scatter(
+        exp_on["Finished Picking At"], exp_on["diff_minutes"],
+        c="#2ca02c", s=6, alpha=0.45,
+        label=f"EXPRESS on time ({len(exp_on):,})",
     )
     ax.scatter(
         late["Finished Picking At"], late["diff_minutes"],
