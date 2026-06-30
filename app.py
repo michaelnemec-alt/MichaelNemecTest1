@@ -19,6 +19,7 @@ st.markdown(
     |------|-------------|
     | **Prio vs Picking** | Scatter plot of picking timeliness vs prioritization time |
     | **UNIFY Pivot Ready** | Convert Unify/CubeAnalytics CSV to pivot-ready format |
+    | **Day Evaluation** | Shift decision support — plan vs actual, buffer assessment |
     """
 )
 
@@ -51,6 +52,24 @@ with col2:
                 <li>Upload multiple files at once</li>
                 <li>Weighted averages & open ports</li>
                 <li>Download output CSV files</li>
+            </ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+col3, _ = st.columns(2)
+with col3:
+    st.markdown(
+        """
+        <div style="background:#e8f5e9; border-radius:12px; padding:24px; min-height:180px">
+            <h3>🎯 Day Evaluation</h3>
+            <p>Shift decision support tool</p>
+            <ul>
+                <li>Plan vs Actual scissors indicator</li>
+                <li>Pre-pick buffer assessment</li>
+                <li>Next-day pre-picking volume</li>
+                <li>Capacity recommendations</li>
             </ul>
         </div>
         """,
