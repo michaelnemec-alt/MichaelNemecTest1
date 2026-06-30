@@ -49,7 +49,8 @@ with st.sidebar:
         "- `Finished Picking At`\n\n"
         "**Plan file columns:**\n"
         "- `Date`\n"
-        "- `order-planned-{H}`"
+        "- `order-planned-{H}`\n\n"
+        "💡 *Upload 2 days of picking data to see pre-picked share per hour.*"
     )
 
 
@@ -123,18 +124,34 @@ def generate_chart(data, autostore_num, warehouse_name, plan_pct=None, time_shif
         shifted_hours = plan_pct["hour"].values - time_shift_h
         x_times = [base_date + pd.Timedelta(hours=float(h)) for h in shifted_hours]
 
-        # Compute actual % shape for this AutoStore (same-day only, by prio hour)
-        same_day_as = data[~data["is_next_day"]].copy()
-        as_prio_counts = same_day_as.groupby("prio_hour").size()
-        as_total = as_prio_counts.sum()
+        # Target date = the date shown on the chart (Finished Picking At date)
+        target_date = base_date.date()
+
+        # All orders with Prioritization Time on target date (includes pre-picks from day before)
+        all_for_target = data[data["Prioritization Time"].dt.date == target_date]
+        all_prio_counts = all_for_target.groupby("prio_hour").size()
+        all_total = all_prio_counts.sum()
+
+        # Same-day only: prio date = target AND finished date = target
+        sameday_for_target = all_for_target[
+            all_for_target["Finished Picking At"].dt.date == target_date
+        ]
+        sameday_prio_counts = sameday_for_target.groupby("prio_hour").size()
+        sameday_total = all_total  # normalize both to same total for comparison
+
         actual_pct_vals = []
+        sameday_pct_vals = []
         for h in plan_pct["hour"].values:
             actual_pct_vals.append(
-                (as_prio_counts.get(h, 0) / as_total * 100) if as_total > 0 else 0
+                (all_prio_counts.get(h, 0) / all_total * 100) if all_total > 0 else 0
+            )
+            sameday_pct_vals.append(
+                (sameday_prio_counts.get(h, 0) / sameday_total * 100) if sameday_total > 0 else 0
             )
 
         plan_arr = plan_pct["plan_pct"].values
         actual_arr = np.array(actual_pct_vals)
+        sameday_arr = np.array(sameday_pct_vals)
 
         ax2.plot(
             x_times, plan_arr,
@@ -146,15 +163,24 @@ def generate_chart(data, autostore_num, warehouse_name, plan_pct=None, time_shif
             color="#d62728", linewidth=2.5, linestyle="-", alpha=0.8,
             label=f"Actual shape % (shifted -{time_shift_h}h)",
         )
+        ax2.plot(
+            x_times, sameday_arr,
+            color="#d62728", linewidth=1.8, linestyle=":", alpha=0.6,
+            label=f"Same-day only % (shifted -{time_shift_h}h)",
+        )
+        ax2.fill_between(
+            x_times, sameday_arr, actual_arr,
+            alpha=0.10, color="#999999", label="Pre-picked (day before)",
+        )
         ax2.fill_between(
             x_times, plan_arr, actual_arr,
             where=plan_arr > actual_arr,
-            alpha=0.08, color="#9467bd", label="Surplus (plan > actual)",
+            alpha=0.06, color="#9467bd", label="Surplus (plan > actual)",
         )
         ax2.fill_between(
             x_times, plan_arr, actual_arr,
             where=actual_arr > plan_arr,
-            alpha=0.08, color="#d62728", label="Deficit (actual > plan)",
+            alpha=0.06, color="#d62728", label="Deficit (actual > plan)",
         )
         ax2.set_ylabel("% of daily orders (shape)", fontsize=13)
         ax2.legend(loc="upper right", fontsize=11, framealpha=0.9)
