@@ -54,7 +54,7 @@ with st.sidebar:
 
 
 # ── Chart function ──────────────────────────────────────────────────────────
-def generate_chart(data, autostore_num, warehouse_name, plan_data=None, time_shift_h=3):
+def generate_chart(data, autostore_num, warehouse_name, plan_pct=None, time_shift_h=3):
     fig, ax = plt.subplots(figsize=(24, 10), dpi=150)
     ax.set_facecolor("#f8f8f8")
     fig.patch.set_facecolor("white")
@@ -117,34 +117,46 @@ def generate_chart(data, autostore_num, warehouse_name, plan_data=None, time_shi
     ax.grid(which="minor", axis="y", alpha=0.2, color="#cccccc", linestyle="--")
     plt.xticks(rotation=45, ha="right")
 
-    if plan_data is not None and not plan_data.empty:
+    if plan_pct is not None and not plan_pct.empty:
         ax2 = ax.twinx()
         base_date = data["Finished Picking At"].dt.normalize().iloc[0]
-        shifted_hours = plan_data["hour"].values - time_shift_h
+        shifted_hours = plan_pct["hour"].values - time_shift_h
         x_times = [base_date + pd.Timedelta(hours=float(h)) for h in shifted_hours]
+
+        # Compute actual % shape for this AutoStore (same-day only, by prio hour)
+        same_day_as = data[~data["is_next_day"]].copy()
+        as_prio_counts = same_day_as.groupby("prio_hour").size()
+        as_total = as_prio_counts.sum()
+        actual_pct_vals = []
+        for h in plan_pct["hour"].values:
+            actual_pct_vals.append(
+                (as_prio_counts.get(h, 0) / as_total * 100) if as_total > 0 else 0
+            )
+
+        plan_arr = plan_pct["plan_pct"].values
+        actual_arr = np.array(actual_pct_vals)
+
         ax2.plot(
-            x_times, plan_data["planned"].values,
+            x_times, plan_arr,
             color="#9467bd", linewidth=2.5, linestyle="--", alpha=0.8,
-            label=f"Plan (orders, shifted -{time_shift_h}h)",
+            label=f"Plan shape % (shifted -{time_shift_h}h)",
         )
         ax2.plot(
-            x_times, plan_data["actual"].values,
+            x_times, actual_arr,
             color="#d62728", linewidth=2.5, linestyle="-", alpha=0.8,
-            label=f"Actual (orders, shifted -{time_shift_h}h)",
+            label=f"Actual shape % (shifted -{time_shift_h}h)",
         )
-        planned_arr = plan_data["planned"].values
-        actual_arr = plan_data["actual"].values
         ax2.fill_between(
-            x_times, planned_arr, actual_arr,
-            where=planned_arr > actual_arr,
+            x_times, plan_arr, actual_arr,
+            where=plan_arr > actual_arr,
             alpha=0.08, color="#9467bd", label="Surplus (plan > actual)",
         )
         ax2.fill_between(
-            x_times, planned_arr, actual_arr,
-            where=actual_arr > planned_arr,
+            x_times, plan_arr, actual_arr,
+            where=actual_arr > plan_arr,
             alpha=0.08, color="#d62728", label="Deficit (actual > plan)",
         )
-        ax2.set_ylabel("Orders per hour (plan/actual)", fontsize=13)
+        ax2.set_ylabel("% of daily orders (shape)", fontsize=13)
         ax2.legend(loc="upper right", fontsize=11, framealpha=0.9)
 
     plt.tight_layout()
@@ -221,12 +233,11 @@ date_range = (
     f"{dates.min()} – {dates.max()}" if dates.min() != dates.max() else str(dates.min())
 )
 
-# ── Compute actual orders per prio-hour from picking export ─────────────────
+# ── Compute prio_hour for overlay ────────────────────────────────────────────
 df["prio_hour"] = df["Prioritization Time"].dt.hour
-actual_by_prio_hour = df.groupby("prio_hour").size().reset_index(name="actual")
 
-# ── Parse plan file (optional) ──────────────────────────────────────────────
-plan_hourly = None
+# ── Parse plan file (optional) — convert to % shape ─────────────────────────
+plan_pct = None
 if plan_file is not None:
     try:
         plan_raw = pd.read_csv(plan_file, sep=";")
@@ -238,16 +249,20 @@ if plan_file is not None:
         if not plan_day.empty:
             row = plan_day.iloc[0]
             plan_rows = []
-            for h in range(5, 23):
+            for h in range(3, 23):
                 p_col = f"order-planned-{h}"
                 p_val = 0
                 if p_col in row.index and pd.notna(row[p_col]) and str(row[p_col]).strip():
                     p_val = float(str(row[p_col]).replace(",", ""))
-                a_row = actual_by_prio_hour[actual_by_prio_hour["prio_hour"] == h]
-                a_val = int(a_row["actual"].iloc[0]) if not a_row.empty else 0
-                plan_rows.append({"hour": h, "planned": p_val, "actual": a_val})
-            plan_hourly = pd.DataFrame(plan_rows)
-            st.success(f"Plan file loaded for {pick_date} — overlay enabled (shift: -{time_shift}h)")
+                plan_rows.append({"hour": h, "planned": p_val})
+            plan_df = pd.DataFrame(plan_rows)
+            total_plan = plan_df["planned"].sum()
+            if total_plan > 0:
+                plan_df["plan_pct"] = plan_df["planned"] / total_plan * 100
+            else:
+                plan_df["plan_pct"] = 0.0
+            plan_pct = plan_df[["hour", "plan_pct"]]
+            st.success(f"Plan file loaded for {pick_date} — shape overlay enabled (shift: -{time_shift}h)")
         else:
             st.warning(f"Plan file has no data for {pick_date}")
     except Exception as e:
@@ -275,7 +290,7 @@ if stats_91:
     c5.metric("Late", f"{stats_91['Late %']}%")
     c6.metric("Median", f"{stats_91['Median same-day (min)']} min")
 
-    fig_91 = generate_chart(df_91, 91, warehouse, plan_data=plan_hourly, time_shift_h=time_shift)
+    fig_91 = generate_chart(df_91, 91, warehouse, plan_pct=plan_pct, time_shift_h=time_shift)
     st.pyplot(fig_91)
 
     st.download_button(
@@ -303,7 +318,7 @@ if stats_92:
     c5.metric("Late", f"{stats_92['Late %']}%")
     c6.metric("Median", f"{stats_92['Median same-day (min)']} min")
 
-    fig_92 = generate_chart(df_92, 92, warehouse, plan_data=plan_hourly, time_shift_h=time_shift)
+    fig_92 = generate_chart(df_92, 92, warehouse, plan_pct=plan_pct, time_shift_h=time_shift)
     st.pyplot(fig_92)
 
     st.download_button(
