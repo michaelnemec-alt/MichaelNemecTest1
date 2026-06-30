@@ -22,36 +22,51 @@ st.markdown(
 with st.sidebar:
     st.header("⚙️ Settings")
     uploaded_file = st.file_uploader(
-        "Upload CSV file",
+        "Upload picking export CSV",
         type=["csv"],
         help="Semicolon-delimited (;) CSV with order-level / pick-task-level export",
+    )
+    plan_file = st.file_uploader(
+        "Upload plan file (optional)",
+        type=["csv"],
+        help="Semicolon-delimited (;) plan file with order-planned-{H} and order-realized-{H} columns",
     )
     st.divider()
     show_comparison = st.checkbox("Show AS91 vs AS92 comparison", value=True)
     show_hourly = st.checkbox("Show hourly distribution", value=True)
     st.divider()
     st.markdown(
-        "**Required columns:**\n"
+        "**Required columns (picking):**\n"
         "- `AutoStore`\n"
         "- `Type`\n"
         "- `Prioritization Time`\n"
-        "- `Finished Picking At`"
+        "- `Finished Picking At`\n\n"
+        "**Plan file columns:**\n"
+        "- `Date`\n"
+        "- `order-planned-{H}` / `order-realized-{H}`"
     )
 
 
 # ── Chart function ──────────────────────────────────────────────────────────
-def generate_chart(data, autostore_num, warehouse_name):
+def generate_chart(data, autostore_num, warehouse_name, plan_data=None):
     fig, ax = plt.subplots(figsize=(24, 10), dpi=150)
     ax.set_facecolor("#f8f8f8")
     fig.patch.set_facecolor("white")
     ax.grid(True, alpha=0.3, color="#cccccc")
 
-    late = data[data["diff_minutes"] < 0]
-    std_on = data[(data["diff_minutes"] >= 0) & (data["Type"] == "STANDARD")]
-    exp_on = data[(data["diff_minutes"] >= 0) & (data["Type"] == "EXPRESS")]
+    next_day = data[data["is_next_day"]]
+    same_day = data[~data["is_next_day"]]
+    late = same_day[same_day["diff_minutes"] < 0]
+    std_on = same_day[(same_day["diff_minutes"] >= 0) & (same_day["Type"] == "STANDARD")]
+    exp_on = same_day[(same_day["diff_minutes"] >= 0) & (same_day["Type"] == "EXPRESS")]
     total = len(data)
     late_pct = (len(late) / total * 100) if total > 0 else 0
 
+    ax.scatter(
+        next_day["Finished Picking At"], next_day["diff_minutes"],
+        c="#999999", s=6, alpha=0.35,
+        label=f"Next-day pre-pick ({len(next_day):,})",
+    )
     ax.scatter(
         std_on["Finished Picking At"], std_on["diff_minutes"],
         c="#1f77b4", s=6, alpha=0.45,
@@ -95,6 +110,35 @@ def generate_chart(data, autostore_num, warehouse_name):
     ax.yaxis.set_minor_locator(plt.MultipleLocator(50))
     ax.grid(which="minor", axis="y", alpha=0.2, color="#cccccc", linestyle="--")
     plt.xticks(rotation=45, ha="right")
+
+    if plan_data is not None and not plan_data.empty:
+        ax2 = ax.twinx()
+        hours = plan_data["hour"].values
+        base_date = data["Finished Picking At"].dt.normalize().iloc[0]
+        x_times = [base_date + pd.Timedelta(hours=int(h)) for h in hours]
+        ax2.plot(
+            x_times, plan_data["planned"].values,
+            color="#9467bd", linewidth=2.5, linestyle="--", alpha=0.8,
+            label="Plan (orders)",
+        )
+        ax2.plot(
+            x_times, plan_data["realized"].values,
+            color="#d62728", linewidth=2.5, linestyle="-", alpha=0.8,
+            label="Actual (orders)",
+        )
+        ax2.fill_between(
+            x_times, plan_data["planned"].values, plan_data["realized"].values,
+            where=plan_data["planned"].values > plan_data["realized"].values,
+            alpha=0.08, color="#9467bd", label="Surplus (plan > actual)",
+        )
+        ax2.fill_between(
+            x_times, plan_data["planned"].values, plan_data["realized"].values,
+            where=plan_data["realized"].values > plan_data["planned"].values,
+            alpha=0.08, color="#d62728", label="Deficit (actual > plan)",
+        )
+        ax2.set_ylabel("Orders per hour (plan/actual)", fontsize=13)
+        ax2.legend(loc="upper right", fontsize=11, framealpha=0.9)
+
     plt.tight_layout()
     return fig
 
@@ -103,18 +147,20 @@ def compute_stats(data):
     total = len(data)
     if total == 0:
         return {}
-    on_time = len(data[data["diff_minutes"] >= 0])
-    late = total - on_time
+    same_day = data[~data["is_next_day"]]
+    next_day = data[data["is_next_day"]]
+    on_time = len(same_day[same_day["diff_minutes"] >= 0])
+    late = len(same_day[same_day["diff_minutes"] < 0])
     return {
         "Total": total,
+        "Same-day": len(same_day),
+        "Next-day": len(next_day),
         "On Time": on_time,
-        "On Time %": round(on_time / total * 100, 1),
+        "On Time %": round(on_time / len(same_day) * 100, 1) if len(same_day) > 0 else 0,
         "Late": late,
-        "Late %": round(late / total * 100, 1),
-        "Median (min)": round(data["diff_minutes"].median(), 1),
-        "Mean (min)": round(data["diff_minutes"].mean(), 1),
-        "Max early (min)": round(data["diff_minutes"].max(), 1),
-        "Max late (min)": round(data["diff_minutes"].min(), 1),
+        "Late %": round(late / len(same_day) * 100, 1) if len(same_day) > 0 else 0,
+        "Median same-day (min)": round(same_day["diff_minutes"].median(), 1) if len(same_day) > 0 else 0,
+        "Mean same-day (min)": round(same_day["diff_minutes"].mean(), 1) if len(same_day) > 0 else 0,
     }
 
 
@@ -155,6 +201,7 @@ df = df.dropna(subset=["Prioritization Time", "Finished Picking At"])
 df["diff_minutes"] = (
     (df["Prioritization Time"] - df["Finished Picking At"]).dt.total_seconds() / 60
 )
+df["is_next_day"] = df["Prioritization Time"].dt.date > df["Finished Picking At"].dt.date
 
 df_91 = df[df["AutoStore"].str.contains(".91", regex=False)].copy()
 df_92 = df[df["AutoStore"].str.contains(".92", regex=False)].copy()
@@ -165,6 +212,36 @@ dates = df["Finished Picking At"].dt.date
 date_range = (
     f"{dates.min()} – {dates.max()}" if dates.min() != dates.max() else str(dates.min())
 )
+
+# ── Parse plan file (optional) ──────────────────────────────────────────────
+plan_hourly = None
+if plan_file is not None:
+    try:
+        plan_raw = pd.read_csv(plan_file, sep=";")
+        plan_raw["parsed_date"] = pd.to_datetime(
+            plan_raw["Date"].str.extract(r"(\w+ \w+ \d+ \d+)")[0], format="%a %b %d %Y"
+        )
+        pick_date = dates.min()
+        plan_day = plan_raw[plan_raw["parsed_date"].dt.date == pick_date]
+        if not plan_day.empty:
+            row = plan_day.iloc[0]
+            plan_rows = []
+            for h in range(5, 23):
+                p_col = f"order-planned-{h}"
+                a_col = f"order-realized-{h}"
+                p_val = 0
+                a_val = 0
+                if p_col in row.index and pd.notna(row[p_col]) and str(row[p_col]).strip():
+                    p_val = float(str(row[p_col]).replace(",", ""))
+                if a_col in row.index and pd.notna(row[a_col]) and str(row[a_col]).strip():
+                    a_val = float(str(row[a_col]).replace(",", ""))
+                plan_rows.append({"hour": h, "planned": p_val, "realized": a_val})
+            plan_hourly = pd.DataFrame(plan_rows)
+            st.success(f"Plan file loaded for {pick_date} — overlay enabled")
+        else:
+            st.warning(f"Plan file has no data for {pick_date}")
+    except Exception as e:
+        st.warning(f"Could not parse plan file: {e}")
 
 # ── Info bar ────────────────────────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)
@@ -180,15 +257,15 @@ st.header("AutoStore 91")
 stats_91 = compute_stats(df_91)
 
 if stats_91:
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Total", f"{stats_91['Total']:,}")
-    pct_91 = stats_91["On Time %"]
-    c2.metric("On Time", f"{pct_91}%", delta=None)
-    c3.metric("Late", f"{stats_91['Late %']}%")
-    c4.metric("Median", f"{stats_91['Median (min)']} min")
-    c5.metric("Mean", f"{stats_91['Mean (min)']} min")
+    c2.metric("Same-day", f"{stats_91['Same-day']:,}")
+    c3.metric("Next-day", f"{stats_91['Next-day']:,}")
+    c4.metric("On Time", f"{stats_91['On Time %']}%")
+    c5.metric("Late", f"{stats_91['Late %']}%")
+    c6.metric("Median", f"{stats_91['Median same-day (min)']} min")
 
-    fig_91 = generate_chart(df_91, 91, warehouse)
+    fig_91 = generate_chart(df_91, 91, warehouse, plan_data=plan_hourly)
     st.pyplot(fig_91)
 
     st.download_button(
@@ -208,14 +285,15 @@ st.header("AutoStore 92")
 stats_92 = compute_stats(df_92)
 
 if stats_92:
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Total", f"{stats_92['Total']:,}")
-    c2.metric("On Time", f"{stats_92['On Time %']}%")
-    c3.metric("Late", f"{stats_92['Late %']}%")
-    c4.metric("Median", f"{stats_92['Median (min)']} min")
-    c5.metric("Mean", f"{stats_92['Mean (min)']} min")
+    c2.metric("Same-day", f"{stats_92['Same-day']:,}")
+    c3.metric("Next-day", f"{stats_92['Next-day']:,}")
+    c4.metric("On Time", f"{stats_92['On Time %']}%")
+    c5.metric("Late", f"{stats_92['Late %']}%")
+    c6.metric("Median", f"{stats_92['Median same-day (min)']} min")
 
-    fig_92 = generate_chart(df_92, 92, warehouse)
+    fig_92 = generate_chart(df_92, 92, warehouse, plan_data=plan_hourly)
     st.pyplot(fig_92)
 
     st.download_button(
