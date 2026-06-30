@@ -91,6 +91,9 @@ def generate_chart(data, autostore_num, warehouse_name):
     ax.set_ylabel("Minutes (+ on time / - late)", fontsize=13)
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
     ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+    ax.yaxis.set_major_locator(plt.MultipleLocator(100))
+    ax.yaxis.set_minor_locator(plt.MultipleLocator(50))
+    ax.grid(which="minor", axis="y", alpha=0.2, color="#cccccc", linestyle="--")
     plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
     return fig
