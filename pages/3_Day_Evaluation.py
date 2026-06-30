@@ -28,7 +28,7 @@ with st.sidebar:
     plan_file = st.file_uploader(
         "Plan file CSV *",
         type=["csv"],
-        help="Semicolon-delimited (;) plan file with order-planned/realized columns",
+        help="Semicolon-delimited (;) plan file with order-planned-{H} columns",
     )
     st.divider()
     st.markdown(
@@ -38,7 +38,7 @@ with st.sidebar:
     )
 
 
-def parse_plan(plan_file_data, target_date):
+def parse_plan(plan_file_data, target_date, actual_by_prio_hour):
     plan_raw = pd.read_csv(io.BytesIO(plan_file_data), sep=";")
     plan_raw["parsed_date"] = pd.to_datetime(
         plan_raw["Date"].str.extract(r"(\w+ \w+ \d+ \d+)")[0], format="%a %b %d %Y"
@@ -50,14 +50,12 @@ def parse_plan(plan_file_data, target_date):
     plan_rows = []
     for h in range(5, 23):
         p_col = f"order-planned-{h}"
-        a_col = f"order-realized-{h}"
         p_val = 0
-        a_val = 0
         if p_col in row.index and pd.notna(row[p_col]) and str(row[p_col]).strip():
             p_val = float(str(row[p_col]).replace(",", ""))
-        if a_col in row.index and pd.notna(row[a_col]) and str(row[a_col]).strip():
-            a_val = float(str(row[a_col]).replace(",", ""))
-        plan_rows.append({"hour": h, "planned": p_val, "realized": a_val})
+        a_row = actual_by_prio_hour[actual_by_prio_hour["prio_hour"] == h]
+        a_val = int(a_row["actual"].iloc[0]) if not a_row.empty else 0
+        plan_rows.append({"hour": h, "planned": p_val, "actual": a_val})
     return pd.DataFrame(plan_rows)
 
 
@@ -77,7 +75,7 @@ if picking_file is None or plan_file is None:
         ### How it works
 
         1. Upload the **picking export** (current day's pick tasks from AutoStore)
-        2. Upload the **plan file** (contains planned vs realized orders per hour)
+        2. Upload the **plan file** (contains planned orders per hour)
         3. The tool analyzes:
            - **Scissors indicator** — cumulative gap between plan and actual demand
            - **Pre-pick buffer** — how far ahead orders are being picked
@@ -109,23 +107,25 @@ df["diff_minutes"] = (
 )
 df["is_next_day"] = df["Prioritization Time"].dt.date > df["Finished Picking At"].dt.date
 df["hour"] = df["Finished Picking At"].dt.hour
+df["prio_hour"] = df["Prioritization Time"].dt.hour
 
 pick_date = df["Finished Picking At"].dt.date.min()
+actual_by_prio_hour = df.groupby("prio_hour").size().reset_index(name="actual")
 
 # ── Load plan data ───────────────────────────────────────────────────────────
-plan_hourly = parse_plan(plan_file.getvalue(), pick_date)
+plan_hourly = parse_plan(plan_file.getvalue(), pick_date, actual_by_prio_hour)
 if plan_hourly is None:
     st.error(f"Plan file has no data matching the picking date: **{pick_date}**")
     st.stop()
 
 # ── Compute metrics ──────────────────────────────────────────────────────────
 plan_hourly["cum_planned"] = plan_hourly["planned"].cumsum()
-plan_hourly["cum_realized"] = plan_hourly["realized"].cumsum()
-plan_hourly["cum_surplus"] = plan_hourly["cum_planned"] - plan_hourly["cum_realized"]
-plan_hourly["hourly_gap"] = plan_hourly["planned"] - plan_hourly["realized"]
+plan_hourly["cum_actual"] = plan_hourly["actual"].cumsum()
+plan_hourly["cum_surplus"] = plan_hourly["cum_planned"] - plan_hourly["cum_actual"]
+plan_hourly["hourly_gap"] = plan_hourly["planned"] - plan_hourly["actual"]
 
 total_planned = plan_hourly["planned"].sum()
-total_realized = plan_hourly["realized"].sum()
+total_actual = plan_hourly["actual"].sum()
 final_surplus = plan_hourly["cum_surplus"].iloc[-1]
 
 same_day = df[~df["is_next_day"]]
@@ -163,7 +163,7 @@ hours = plan_hourly["hour"].values
 
 # Top: Hourly plan vs actual
 ax1.bar(hours - 0.2, plan_hourly["planned"], width=0.4, color="#9467bd", alpha=0.7, label="Planned")
-ax1.bar(hours + 0.2, plan_hourly["realized"], width=0.4, color="#d62728", alpha=0.7, label="Actual")
+ax1.bar(hours + 0.2, plan_hourly["actual"], width=0.4, color="#d62728", alpha=0.7, label="Actual")
 ax1.set_ylabel("Orders per hour")
 ax1.set_title(f"Hourly Orders — Plan vs Actual | {pick_date}", fontsize=14, fontweight="bold")
 ax1.legend(fontsize=12)
@@ -277,7 +277,7 @@ with col1:
 | Metric | Value |
 |--------|-------|
 | Total planned orders | {total_planned:,.0f} |
-| Total realized orders | {total_realized:,.0f} |
+| Total actual orders | {total_actual:,.0f} |
 | End-of-day gap | {final_surplus:+,.0f} |
 | Max cumulative surplus | {max_surplus:+,.0f} |
 | Max cumulative deficit | {max_deficit:+,.0f} |
