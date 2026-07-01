@@ -32,12 +32,6 @@ with st.sidebar:
         help="Semicolon-delimited (;) plan file with order-planned-{H} columns",
     )
     st.divider()
-    time_shift = st.slider(
-        "Plan → picking time shift (hours)",
-        min_value=0, max_value=6, value=3,
-        help="Hours before prioritization time that picking starts. "
-             "Shifts the plan/actual overlay left to align with picking times.",
-    )
     show_comparison = st.checkbox("Show AS91 vs AS92 comparison", value=True)
     show_hourly = st.checkbox("Show hourly distribution", value=True)
     st.divider()
@@ -50,12 +44,12 @@ with st.sidebar:
         "**Plan file columns:**\n"
         "- `Date`\n"
         "- `order-planned-{H}`\n\n"
-        "💡 *Upload 2 days of picking data to see pre-picked share per hour.*"
+        "💡 *Upload 2+ days of picking data to see pre-picked vs same-day breakdown.*"
     )
 
 
 # ── Chart function ──────────────────────────────────────────────────────────
-def generate_chart(data, autostore_num, warehouse_name, plan_pct=None, time_shift_h=3, full_data=None):
+def generate_chart(data, autostore_num, warehouse_name):
     fig, ax = plt.subplots(figsize=(24, 10), dpi=150)
     ax.set_facecolor("#f8f8f8")
     fig.patch.set_facecolor("white")
@@ -118,75 +112,58 @@ def generate_chart(data, autostore_num, warehouse_name, plan_pct=None, time_shif
     ax.grid(which="minor", axis="y", alpha=0.2, color="#cccccc", linestyle="--")
     plt.xticks(rotation=45, ha="right")
 
-    if plan_pct is not None and not plan_pct.empty:
-        ax2 = ax.twinx()
-        base_date = data["Finished Picking At"].dt.normalize().iloc[0]
-        shifted_hours = plan_pct["hour"].values - time_shift_h
-        x_times = [base_date + pd.Timedelta(hours=float(h)) for h in shifted_hours]
+    plt.tight_layout()
+    return fig
 
-        # Target date = the date shown on the chart (Finished Picking At date)
-        chart_target_date = base_date.date()
 
-        # Use full_data (all days) to capture pre-picks from day before
-        overlay_src = full_data if full_data is not None else data
+def generate_shape_chart(full_data, autostore_num, target_date, warehouse_name,
+                         plan_planned=None):
+    hours = list(range(0, 24))
 
-        # All orders with Prioritization Time on target date (includes pre-picks from day before)
-        all_for_target = overlay_src[overlay_src["Prioritization Time"].dt.date == chart_target_date]
-        all_prio_counts = all_for_target.groupby("prio_hour").size()
-        all_total = all_prio_counts.sum()
+    # Orders with Prioritization Time on target_date
+    all_target = full_data[full_data["Prioritization Time"].dt.date == target_date]
 
-        # Same-day only: prio date = target AND finished date = target
-        sameday_for_target = all_for_target[
-            all_for_target["Finished Picking At"].dt.date == chart_target_date
-        ]
-        sameday_prio_counts = sameday_for_target.groupby("prio_hour").size()
-        sameday_total = all_total  # normalize both to same total for comparison
+    # Pre-picked: finished BEFORE target_date
+    prepicked = all_target[all_target["Finished Picking At"].dt.date < target_date]
+    prepick_counts = prepicked.groupby("prio_hour").size()
 
-        actual_pct_vals = []
-        sameday_pct_vals = []
-        for h in plan_pct["hour"].values:
-            actual_pct_vals.append(
-                (all_prio_counts.get(h, 0) / all_total * 100) if all_total > 0 else 0
-            )
-            sameday_pct_vals.append(
-                (sameday_prio_counts.get(h, 0) / sameday_total * 100) if sameday_total > 0 else 0
-            )
+    # Same-day picked: finished ON target_date
+    sameday = all_target[all_target["Finished Picking At"].dt.date == target_date]
+    sameday_counts = sameday.groupby("prio_hour").size()
 
-        plan_arr = plan_pct["plan_pct"].values
-        actual_arr = np.array(actual_pct_vals)
-        sameday_arr = np.array(sameday_pct_vals)
+    prepick_vals = [int(prepick_counts.get(h, 0)) for h in hours]
+    sameday_vals = [int(sameday_counts.get(h, 0)) for h in hours]
 
-        ax2.plot(
-            x_times, plan_arr,
-            color="#9467bd", linewidth=2.5, linestyle="--", alpha=0.8,
-            label=f"Plan shape % (shifted -{time_shift_h}h)",
-        )
-        ax2.plot(
-            x_times, actual_arr,
-            color="#d62728", linewidth=2.5, linestyle="-", alpha=0.8,
-            label=f"Actual shape % (shifted -{time_shift_h}h)",
-        )
-        ax2.plot(
-            x_times, sameday_arr,
-            color="#d62728", linewidth=1.8, linestyle=":", alpha=0.6,
-            label=f"Same-day only % (shifted -{time_shift_h}h)",
-        )
-        ax2.fill_between(
-            x_times, sameday_arr, actual_arr,
-            alpha=0.10, color="#999999", label="Pre-picked (day before)",
-        )
-        ax2.fill_between(
-            x_times, plan_arr, actual_arr,
-            where=plan_arr > actual_arr,
-            alpha=0.06, color="#9467bd", label="Surplus (plan > actual)",
-        )
-        ax2.fill_between(
-            x_times, plan_arr, actual_arr,
-            where=actual_arr > plan_arr,
-            alpha=0.06, color="#d62728", label="Deficit (actual > plan)",
-        )
-        ax2.set_ylabel("% of daily orders (shape)", fontsize=13)
-        ax2.legend(loc="upper right", fontsize=11, framealpha=0.9)
+    fig, ax = plt.subplots(figsize=(20, 8), dpi=150)
+    ax.set_facecolor("#f8f8f8")
+    fig.patch.set_facecolor("white")
+
+    # Plan overlay behind (if available)
+    if plan_planned is not None:
+        plan_vals = [float(plan_planned.get(h, 0)) for h in hours]
+        ax.fill_between(hours, plan_vals, alpha=0.15, color="#9467bd", step="mid")
+        ax.step(hours, plan_vals, where="mid", color="#9467bd",
+                linewidth=2, linestyle="--", alpha=0.7, label="Plan")
+
+    # Stacked area: pre-picked (bottom) + same-day (top)
+    ax.fill_between(hours, 0, prepick_vals, alpha=0.5, color="#d62728",
+                    step="mid", label=f"Pre-picked ({sum(prepick_vals):,})")
+    bottom = np.array(prepick_vals)
+    top = bottom + np.array(sameday_vals)
+    ax.fill_between(hours, bottom, top, alpha=0.5, color="#1f77b4",
+                    step="mid", label=f"Same-day picked ({sum(sameday_vals):,})")
+
+    ax.set_title(
+        f"Order Shape by Prioritization Hour — AutoStore {autostore_num}\n"
+        f"Target date: {target_date} | {warehouse_name}",
+        fontsize=16, fontweight="bold",
+    )
+    ax.set_xlabel("Prioritization Time (hour)", fontsize=13)
+    ax.set_ylabel("Order count", fontsize=13)
+    ax.set_xlim(0, 23)
+    ax.set_xticks(hours)
+    ax.grid(True, alpha=0.3, color="#cccccc")
+    ax.legend(loc="upper right", fontsize=12, framealpha=0.9)
 
     plt.tight_layout()
     return fig
@@ -258,58 +235,49 @@ df_92 = df[df["AutoStore"].str.contains(".92", regex=False)].copy()
 parts = df["AutoStore"].iloc[0].split(".")
 warehouse = f"{parts[0]}.{parts[1]}" if len(parts) >= 2 else "unknown"
 
-dates = df["Finished Picking At"].dt.date
-date_range = (
-    f"{dates.min()} – {dates.max()}" if dates.min() != dates.max() else str(dates.min())
-)
+# ── Date selector ────────────────────────────────────────────────────────────
+available_dates = sorted(df["Finished Picking At"].dt.date.unique())
+if len(available_dates) > 1:
+    target_date = st.selectbox(
+        "Select target date for analysis",
+        options=available_dates,
+        index=len(available_dates) - 1,
+    )
+else:
+    target_date = available_dates[0]
 
-# ── Parse plan file (optional) — convert to % shape ─────────────────────────
-plan_pct = None
-target_date = None
+# Filter scatter to target day only
+df_91_scatter = df_91[df_91["Finished Picking At"].dt.date == target_date].copy()
+df_92_scatter = df_92[df_92["Finished Picking At"].dt.date == target_date].copy()
+
+# ── Parse plan file (optional) — store absolute planned counts ──────────────
+plan_planned = None
 if plan_file is not None:
     try:
         plan_raw = pd.read_csv(plan_file, sep=";")
         plan_raw["parsed_date"] = pd.to_datetime(
             plan_raw["Date"].str.extract(r"(\w+ \w+ \d+ \d+)")[0], format="%a %b %d %Y"
         )
-        available_dates = sorted(df["Finished Picking At"].dt.date.unique())
-        pick_date = available_dates[-1]  # latest date = target day
-        plan_day = plan_raw[plan_raw["parsed_date"].dt.date == pick_date]
+        plan_day = plan_raw[plan_raw["parsed_date"].dt.date == target_date]
         if not plan_day.empty:
-            target_date = pick_date
             row = plan_day.iloc[0]
-            plan_rows = []
-            for h in range(3, 23):
+            plan_planned = {}
+            for h in range(0, 24):
                 p_col = f"order-planned-{h}"
-                p_val = 0
                 if p_col in row.index and pd.notna(row[p_col]) and str(row[p_col]).strip():
-                    p_val = float(str(row[p_col]).replace(",", ""))
-                plan_rows.append({"hour": h, "planned": p_val})
-            plan_df = pd.DataFrame(plan_rows)
-            total_plan = plan_df["planned"].sum()
-            if total_plan > 0:
-                plan_df["plan_pct"] = plan_df["planned"] / total_plan * 100
-            else:
-                plan_df["plan_pct"] = 0.0
-            plan_pct = plan_df[["hour", "plan_pct"]]
-            st.success(f"Plan file loaded for **{pick_date}** — shape overlay enabled (shift: -{time_shift}h)")
+                    plan_planned[h] = float(str(row[p_col]).replace(",", ""))
+                else:
+                    plan_planned[h] = 0.0
+            st.success(f"Plan file loaded for **{target_date}**")
         else:
-            st.warning(f"Plan file has no data for {pick_date}")
+            st.warning(f"Plan file has no data for {target_date}")
     except Exception as e:
         st.warning(f"Could not parse plan file: {e}")
-
-# When plan is loaded, filter scatter to target day only
-if target_date is not None:
-    df_91_scatter = df_91[df_91["Finished Picking At"].dt.date == target_date].copy()
-    df_92_scatter = df_92[df_92["Finished Picking At"].dt.date == target_date].copy()
-else:
-    df_91_scatter = df_91
-    df_92_scatter = df_92
 
 # ── Info bar ────────────────────────────────────────────────────────────────
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Warehouse", warehouse)
-col2.metric("Date", str(target_date) if target_date else date_range)
+col2.metric("Date", str(target_date))
 col3.metric("AutoStore 91", f"{len(df_91_scatter):,}")
 col4.metric("AutoStore 92", f"{len(df_92_scatter):,}")
 
@@ -328,7 +296,7 @@ if stats_91:
     c5.metric("Late", f"{stats_91['Late %']}%")
     c6.metric("Median", f"{stats_91['Median same-day (min)']} min")
 
-    fig_91 = generate_chart(df_91_scatter, 91, warehouse, plan_pct=plan_pct, time_shift_h=time_shift, full_data=df_91)
+    fig_91 = generate_chart(df_91_scatter, 91, warehouse)
     st.pyplot(fig_91)
 
     st.download_button(
@@ -338,6 +306,19 @@ if stats_91:
         mime="image/png",
     )
     plt.close(fig_91)
+
+    fig_shape_91 = generate_shape_chart(
+        df_91, 91, target_date, warehouse, plan_planned=plan_planned,
+    )
+    st.pyplot(fig_shape_91)
+
+    st.download_button(
+        "⬇️ Download PNG — Shape AutoStore 91",
+        data=fig_to_bytes(fig_shape_91),
+        file_name=f"shape_{warehouse}_autostore_91_{target_date}.png",
+        mime="image/png",
+    )
+    plt.close(fig_shape_91)
 else:
     st.warning("No data for AutoStore 91")
 
@@ -356,7 +337,7 @@ if stats_92:
     c5.metric("Late", f"{stats_92['Late %']}%")
     c6.metric("Median", f"{stats_92['Median same-day (min)']} min")
 
-    fig_92 = generate_chart(df_92_scatter, 92, warehouse, plan_pct=plan_pct, time_shift_h=time_shift, full_data=df_92)
+    fig_92 = generate_chart(df_92_scatter, 92, warehouse)
     st.pyplot(fig_92)
 
     st.download_button(
@@ -366,6 +347,19 @@ if stats_92:
         mime="image/png",
     )
     plt.close(fig_92)
+
+    fig_shape_92 = generate_shape_chart(
+        df_92, 92, target_date, warehouse, plan_planned=plan_planned,
+    )
+    st.pyplot(fig_shape_92)
+
+    st.download_button(
+        "⬇️ Download PNG — Shape AutoStore 92",
+        data=fig_to_bytes(fig_shape_92),
+        file_name=f"shape_{warehouse}_autostore_92_{target_date}.png",
+        mime="image/png",
+    )
+    plt.close(fig_shape_92)
 else:
     st.warning("No data for AutoStore 92")
 
