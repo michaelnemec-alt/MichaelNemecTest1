@@ -156,6 +156,14 @@ def generate_chart(data, autostore_num, warehouse_name, full_data=None,
         ax2.plot(x_times, total_vals, color="#333333", linewidth=1.5, alpha=0.6)
 
         ax2.set_ylabel("Order count (by prio hour)", fontsize=13)
+
+        # Align zero on both Y-axes
+        left_min, left_max = ax.get_ylim()
+        if left_min < 0:
+            ratio = abs(left_min) / left_max
+            right_max = ax2.get_ylim()[1]
+            ax2.set_ylim(-right_max * ratio, right_max)
+
         ax2.legend(loc="upper right", fontsize=11, framealpha=0.9)
 
     plt.tight_layout()
