@@ -147,7 +147,7 @@ def generate_chart(data, autostore_num, warehouse_name, full_data=None,
 
         ax2.stackplot(
             x_times, sameday_vals, prepick_vals,
-            colors=["#4a90d9", "#d62728"], alpha=0.35,
+            colors=["#4a90d9", "#d62728"], alpha=0.18,
             labels=[
                 f"Same-day picked ({int(sameday_vals.sum()):,})",
                 f"Pre-picked ({int(prepick_vals.sum()):,})",
