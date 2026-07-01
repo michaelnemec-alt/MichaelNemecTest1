@@ -145,14 +145,15 @@ def generate_chart(data, autostore_num, warehouse_name, full_data=None,
                 label="Plan",
             )
 
-        ax2.fill_between(
-            x_times, 0, prepick_vals, alpha=0.35, color="#d62728",
-            label=f"Pre-picked ({int(prepick_vals.sum()):,})",
+        ax2.stackplot(
+            x_times, prepick_vals, sameday_vals,
+            colors=["#d62728", "#4a90d9"], alpha=0.35,
+            labels=[
+                f"Pre-picked ({int(prepick_vals.sum()):,})",
+                f"Same-day picked ({int(sameday_vals.sum()):,})",
+            ],
         )
-        ax2.fill_between(
-            x_times, prepick_vals, total_vals, alpha=0.35, color="#4a90d9",
-            label=f"Same-day picked ({int(sameday_vals.sum()):,})",
-        )
+        ax2.plot(x_times, prepick_vals, color="#d62728", linewidth=1.5, alpha=0.7)
         ax2.plot(x_times, total_vals, color="#333333", linewidth=1.5, alpha=0.6)
 
         ax2.set_ylabel("Order count (by prio hour)", fontsize=13)
