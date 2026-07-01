@@ -49,7 +49,8 @@ with st.sidebar:
 
 
 # ── Chart function ──────────────────────────────────────────────────────────
-def generate_chart(data, autostore_num, warehouse_name):
+def generate_chart(data, autostore_num, warehouse_name, full_data=None,
+                   target_date=None, plan_planned=None):
     fig, ax = plt.subplots(figsize=(24, 10), dpi=150)
     ax.set_facecolor("#f8f8f8")
     fig.patch.set_facecolor("white")
@@ -112,58 +113,50 @@ def generate_chart(data, autostore_num, warehouse_name):
     ax.grid(which="minor", axis="y", alpha=0.2, color="#cccccc", linestyle="--")
     plt.xticks(rotation=45, ha="right")
 
-    plt.tight_layout()
-    return fig
+    # ── Shape overlay on right Y-axis ────────────────────────────────────────
+    if full_data is not None and target_date is not None:
+        ax2 = ax.twinx()
+        base_date = data["Finished Picking At"].dt.normalize().iloc[0]
+        hours = list(range(0, 24))
+        x_times = [base_date + pd.Timedelta(hours=h) for h in hours]
 
+        all_target = full_data[full_data["Prioritization Time"].dt.date == target_date]
 
-def generate_shape_chart(full_data, autostore_num, target_date, warehouse_name,
-                         plan_planned=None):
-    hours = list(range(0, 24))
+        prepicked = all_target[all_target["Finished Picking At"].dt.date < target_date]
+        prepick_counts = prepicked.groupby("prio_hour").size()
 
-    # Orders with Prioritization Time on target_date
-    all_target = full_data[full_data["Prioritization Time"].dt.date == target_date]
+        sameday_target = all_target[
+            all_target["Finished Picking At"].dt.date == target_date
+        ]
+        sameday_counts = sameday_target.groupby("prio_hour").size()
 
-    # Pre-picked: finished BEFORE target_date
-    prepicked = all_target[all_target["Finished Picking At"].dt.date < target_date]
-    prepick_counts = prepicked.groupby("prio_hour").size()
+        prepick_vals = np.array([prepick_counts.get(h, 0) for h in hours], dtype=float)
+        sameday_vals = np.array([sameday_counts.get(h, 0) for h in hours], dtype=float)
+        total_vals = prepick_vals + sameday_vals
 
-    # Same-day picked: finished ON target_date
-    sameday = all_target[all_target["Finished Picking At"].dt.date == target_date]
-    sameday_counts = sameday.groupby("prio_hour").size()
+        if plan_planned is not None:
+            plan_vals = np.array([plan_planned.get(h, 0) for h in hours], dtype=float)
+            ax2.fill_between(
+                x_times, plan_vals, alpha=0.12, color="#9467bd",
+            )
+            ax2.plot(
+                x_times, plan_vals,
+                color="#9467bd", linewidth=2, linestyle="--", alpha=0.7,
+                label="Plan",
+            )
 
-    prepick_vals = [int(prepick_counts.get(h, 0)) for h in hours]
-    sameday_vals = [int(sameday_counts.get(h, 0)) for h in hours]
+        ax2.fill_between(
+            x_times, 0, prepick_vals, alpha=0.35, color="#d62728",
+            label=f"Pre-picked ({int(prepick_vals.sum()):,})",
+        )
+        ax2.fill_between(
+            x_times, prepick_vals, total_vals, alpha=0.35, color="#4a90d9",
+            label=f"Same-day picked ({int(sameday_vals.sum()):,})",
+        )
+        ax2.plot(x_times, total_vals, color="#333333", linewidth=1.5, alpha=0.6)
 
-    fig, ax = plt.subplots(figsize=(20, 8), dpi=150)
-    ax.set_facecolor("#f8f8f8")
-    fig.patch.set_facecolor("white")
-
-    # Plan overlay behind (if available)
-    if plan_planned is not None:
-        plan_vals = [float(plan_planned.get(h, 0)) for h in hours]
-        ax.fill_between(hours, plan_vals, alpha=0.15, color="#9467bd", step="mid")
-        ax.step(hours, plan_vals, where="mid", color="#9467bd",
-                linewidth=2, linestyle="--", alpha=0.7, label="Plan")
-
-    # Stacked area: pre-picked (bottom) + same-day (top)
-    ax.fill_between(hours, 0, prepick_vals, alpha=0.5, color="#d62728",
-                    step="mid", label=f"Pre-picked ({sum(prepick_vals):,})")
-    bottom = np.array(prepick_vals)
-    top = bottom + np.array(sameday_vals)
-    ax.fill_between(hours, bottom, top, alpha=0.5, color="#1f77b4",
-                    step="mid", label=f"Same-day picked ({sum(sameday_vals):,})")
-
-    ax.set_title(
-        f"Order Shape by Prioritization Hour — AutoStore {autostore_num}\n"
-        f"Target date: {target_date} | {warehouse_name}",
-        fontsize=16, fontweight="bold",
-    )
-    ax.set_xlabel("Prioritization Time (hour)", fontsize=13)
-    ax.set_ylabel("Order count", fontsize=13)
-    ax.set_xlim(0, 23)
-    ax.set_xticks(hours)
-    ax.grid(True, alpha=0.3, color="#cccccc")
-    ax.legend(loc="upper right", fontsize=12, framealpha=0.9)
+        ax2.set_ylabel("Order count (by prio hour)", fontsize=13)
+        ax2.legend(loc="upper right", fontsize=11, framealpha=0.9)
 
     plt.tight_layout()
     return fig
@@ -296,7 +289,10 @@ if stats_91:
     c5.metric("Late", f"{stats_91['Late %']}%")
     c6.metric("Median", f"{stats_91['Median same-day (min)']} min")
 
-    fig_91 = generate_chart(df_91_scatter, 91, warehouse)
+    fig_91 = generate_chart(
+        df_91_scatter, 91, warehouse,
+        full_data=df_91, target_date=target_date, plan_planned=plan_planned,
+    )
     st.pyplot(fig_91)
 
     st.download_button(
@@ -306,19 +302,6 @@ if stats_91:
         mime="image/png",
     )
     plt.close(fig_91)
-
-    fig_shape_91 = generate_shape_chart(
-        df_91, 91, target_date, warehouse, plan_planned=plan_planned,
-    )
-    st.pyplot(fig_shape_91)
-
-    st.download_button(
-        "⬇️ Download PNG — Shape AutoStore 91",
-        data=fig_to_bytes(fig_shape_91),
-        file_name=f"shape_{warehouse}_autostore_91_{target_date}.png",
-        mime="image/png",
-    )
-    plt.close(fig_shape_91)
 else:
     st.warning("No data for AutoStore 91")
 
@@ -337,7 +320,10 @@ if stats_92:
     c5.metric("Late", f"{stats_92['Late %']}%")
     c6.metric("Median", f"{stats_92['Median same-day (min)']} min")
 
-    fig_92 = generate_chart(df_92_scatter, 92, warehouse)
+    fig_92 = generate_chart(
+        df_92_scatter, 92, warehouse,
+        full_data=df_92, target_date=target_date, plan_planned=plan_planned,
+    )
     st.pyplot(fig_92)
 
     st.download_button(
@@ -347,19 +333,6 @@ if stats_92:
         mime="image/png",
     )
     plt.close(fig_92)
-
-    fig_shape_92 = generate_shape_chart(
-        df_92, 92, target_date, warehouse, plan_planned=plan_planned,
-    )
-    st.pyplot(fig_shape_92)
-
-    st.download_button(
-        "⬇️ Download PNG — Shape AutoStore 92",
-        data=fig_to_bytes(fig_shape_92),
-        file_name=f"shape_{warehouse}_autostore_92_{target_date}.png",
-        mime="image/png",
-    )
-    plt.close(fig_shape_92)
 else:
     st.warning("No data for AutoStore 92")
 
