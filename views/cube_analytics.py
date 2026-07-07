@@ -112,11 +112,15 @@ def render():
         st.warning("CubeAnalytics API token not configured. Add `[cubeanalytics] token` to Streamlit secrets.")
         return
 
+    col_menu, col_label = st.columns([1, 12])
+    with col_menu:
+        with st.popover("☰"):
+            selected_view = st.radio("Dashboard view", VIEWS, index=0, key="cube_view", label_visibility="collapsed")
+    with col_label:
+        st.markdown(f"**{selected_view}**")
+
     with st.sidebar:
         st.markdown("#### CUBE Analytics")
-
-        selected_view = st.selectbox("Dashboard view", VIEWS, index=0, key="cube_view")
-        st.divider()
 
         PRESETS = ["Yesterday", "7 days", "14 days", "30 days", "60 days", "90 days", "Custom"]
         if "cube_preset" not in st.session_state:
