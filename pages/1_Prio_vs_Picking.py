@@ -28,7 +28,7 @@ with st.sidebar:
     st.header("⚙️ Settings")
 
     if sf_available:
-        data_source = st.radio("Data source", ["Snowflake", "CSV Upload"], index=0)
+        data_source = st.radio("Data source", ["CSV Upload", "Snowflake"], index=0)
     else:
         data_source = "CSV Upload"
 
