@@ -47,6 +47,7 @@ METRIC_INFO = {
     "Bin Presentations (filtered)": "Total number of bin presentations (picks) filtered by pick type and category. Shows throughput volume over time.",
     "Average Battery Score": "Average battery health score across all robots at each site. Scale: 1 (poor) to 5 (excellent). Low scores may indicate aging batteries needing replacement.",
     "Health Index": "Overall system health score combining uptime, wait times, waste, battery, and error metrics. Scale: 1 (critical) to 5 (excellent). Target: >= 4.0.",
+    "Robot Downtime Breakdown": "Percentage of total robot time spent in non-productive states: Recovery (error recovery), Unavailable (offline/manual control), Service Off Grid (maintenance off grid), Parked On Grid (maintenance on grid). Lower is better.",
 }
 
 
@@ -509,6 +510,66 @@ def _view_performance(date_from_str, date_to_str, aggregation):
         pivot = _aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
         _chart_title_with_info("Robot Availability")
         st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
+
+    if not df_robot.empty:
+        state_cols = {
+            "recovery_pct": "Recovery",
+            "unavailable_pct": "Unavailable",
+            "service_off_grid_pct": "Service Off Grid",
+            "service_on_grid_pct": "Parked On Grid",
+        }
+        available_states = {k: v for k, v in state_cols.items() if k in df_robot.columns}
+        if available_states:
+            _chart_title_with_info("Robot Downtime Breakdown")
+            rdf = df_robot.copy()
+            if aggregation == "Week":
+                rdf["period"] = rdf["date"].dt.to_period("W").dt.start_time
+            elif aggregation == "Month":
+                rdf["period"] = rdf["date"].dt.to_period("M").dt.start_time
+            else:
+                rdf["period"] = rdf["date"]
+            agg_states = rdf.groupby(["site", "period"])[list(available_states.keys())].mean().reset_index()
+            agg_states = agg_states.sort_values("period")
+            if aggregation == "Week":
+                agg_states["period_label"] = agg_states["period"].dt.strftime("W%V %Y")
+            elif aggregation == "Month":
+                agg_states["period_label"] = agg_states["period"].dt.strftime("%Y-%m")
+            else:
+                agg_states["period_label"] = agg_states["period"].dt.strftime("%Y-%m-%d")
+            avg_by_period = agg_states.groupby("period_label")[list(available_states.keys())].mean()
+            avg_by_period = avg_by_period.sort_index()
+            state_colors = {"Recovery": "#E67E22", "Unavailable": "#E74C3C", "Service Off Grid": "#9B59B6", "Parked On Grid": "#7F8C8D"}
+            fig = go.Figure()
+            for col, label in available_states.items():
+                fig.add_trace(go.Bar(
+                    x=avg_by_period.index, y=avg_by_period[col],
+                    name=label, marker_color=state_colors.get(label, "#999"),
+                    hovertemplate=label + ": %{y:.2f}%<extra></extra>",
+                ))
+            fig.update_layout(
+                barmode="stack",
+                title=dict(text="", font=dict(size=1)),
+                yaxis_title="% of Total Robot Time",
+                xaxis_tickangle=-45,
+                xaxis_tickfont=dict(size=9),
+                yaxis_tickfont=dict(size=10),
+                yaxis_tickformat=".2f",
+                legend=dict(font=dict(size=9), orientation="v", yanchor="top", y=1, xanchor="left", x=1.02),
+                height=380,
+                margin=dict(l=60, r=200, t=40, b=60),
+                hovermode="x unified",
+                hoverlabel=dict(font_size=11),
+                plot_bgcolor="white",
+                paper_bgcolor="white",
+            )
+            fig.add_shape(
+                type="rect", xref="paper", yref="paper",
+                x0=0, y0=0, x1=1, y1=1,
+                line=dict(color="#e0e0e0", width=1),
+            )
+            fig.update_xaxes(showgrid=False)
+            fig.update_yaxes(gridcolor="#eee", gridwidth=1)
+            st.plotly_chart(fig, use_container_width=True)
 
 
 def _view_battery_robots(date_from_str, date_to_str, aggregation):
