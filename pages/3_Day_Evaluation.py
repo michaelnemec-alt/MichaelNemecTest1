@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import io
+from datetime import date, timedelta
+
+from snowflake_utils import is_snowflake_configured, get_available_warehouses, query_picking_data
 
 st.set_page_config(
     page_title="Day Evaluation",
@@ -18,13 +19,36 @@ st.markdown(
 )
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────
+sf_available = is_snowflake_configured()
+
 with st.sidebar:
-    st.header("📁 Upload Data")
-    picking_file = st.file_uploader(
-        "Picking export CSV *",
-        type=["csv"],
-        help="Semicolon-delimited (;) CSV with pick-task-level export",
-    )
+    st.header("📁 Data")
+
+    if sf_available:
+        data_source = st.radio("Picking data source", ["Snowflake", "CSV Upload"], index=0)
+    else:
+        data_source = "CSV Upload"
+
+    picking_file = None
+    sf_warehouse = None
+    sf_date_from = None
+    sf_date_to = None
+
+    if data_source == "Snowflake":
+        warehouses = get_available_warehouses()
+        sf_warehouse = st.selectbox("Warehouse", warehouses)
+        col_f, col_t = st.columns(2)
+        with col_f:
+            sf_date_from = st.date_input("From", value=date.today() - timedelta(days=2))
+        with col_t:
+            sf_date_to = st.date_input("To", value=date.today() - timedelta(days=1))
+    else:
+        picking_file = st.file_uploader(
+            "Picking export CSV *",
+            type=["csv"],
+            help="Semicolon-delimited (;) CSV with pick-task-level export",
+        )
+
     plan_file = st.file_uploader(
         "Plan file CSV *",
         type=["csv"],
@@ -32,8 +56,8 @@ with st.sidebar:
     )
     st.divider()
     st.markdown(
-        "**Both files required.**\n\n"
-        "The picking export provides real-time picking status. "
+        "**Both picking data + plan file required.**\n\n"
+        "The picking data provides real-time picking status. "
         "The plan file provides the expected order shape for the day."
     )
 
@@ -67,14 +91,42 @@ def fig_to_bytes(fig):
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
-if picking_file is None or plan_file is None:
-    st.info("👈 Upload **both** files in the left panel to get started.")
+df_raw = None
+
+if data_source == "Snowflake":
+    if sf_warehouse and sf_date_from and sf_date_to:
+        with st.spinner("Loading from Snowflake..."):
+            try:
+                df_raw = query_picking_data(
+                    sf_warehouse, str(sf_date_from), str(sf_date_to),
+                )
+            except Exception as e:
+                st.error(f"Snowflake query failed: {e}")
+                st.stop()
+        if df_raw.empty:
+            st.warning("No data found for the selected warehouse and dates.")
+            st.stop()
+    else:
+        st.info("Select warehouse and date range in the sidebar.")
+        st.stop()
+else:
+    if picking_file is None:
+        st.info("👈 Upload the picking CSV in the left panel.")
+        st.stop()
+    try:
+        df_raw = pd.read_csv(picking_file, sep=";")
+    except Exception as e:
+        st.error(f"Error reading picking CSV: {e}")
+        st.stop()
+
+if plan_file is None:
+    st.info("👈 Upload the **plan file** in the left panel to continue.")
     st.markdown(
         """
         ---
         ### How it works
 
-        1. Upload the **picking export** (current day's pick tasks from AutoStore)
+        1. Provide **picking data** (CSV upload or Snowflake)
         2. Upload the **plan file** (contains planned orders per hour)
         3. The tool analyzes:
            - **Scissors indicator** — cumulative gap between plan and actual demand
@@ -85,17 +137,11 @@ if picking_file is None or plan_file is None:
     )
     st.stop()
 
-# ── Load picking data ────────────────────────────────────────────────────────
-try:
-    df_raw = pd.read_csv(picking_file, sep=";")
-except Exception as e:
-    st.error(f"Error reading picking CSV: {e}")
-    st.stop()
-
+# ── Validate picking data ────────────────────────────────────────────────────
 required = ["AutoStore", "Type", "Prioritization Time", "Finished Picking At"]
 missing = [c for c in required if c not in df_raw.columns]
 if missing:
-    st.error(f"Missing columns in picking file: **{missing}**")
+    st.error(f"Missing columns in picking data: **{missing}**")
     st.stop()
 
 df = df_raw[df_raw["Type"].isin(["STANDARD", "EXPRESS"])].copy()
