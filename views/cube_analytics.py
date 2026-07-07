@@ -126,6 +126,15 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
     return fig
 
 
+def _current_period_start(agg_mode):
+    today = pd.Timestamp.today().normalize()
+    if agg_mode == "Week":
+        return today - pd.Timedelta(days=today.weekday())
+    elif agg_mode == "Month":
+        return today.replace(day=1)
+    return today
+
+
 def _aggregate_pivot(df, value_col, agg_mode):
     df = df.copy()
     if agg_mode == "Week":
@@ -134,6 +143,9 @@ def _aggregate_pivot(df, value_col, agg_mode):
         df["period"] = df["date"].dt.to_period("M").dt.start_time
     else:
         df["period"] = df["date"]
+    if agg_mode in ("Week", "Month"):
+        cutoff = _current_period_start(agg_mode)
+        df = df[df["period"] < cutoff]
     grouped = df.groupby(["site", "period"])[value_col].mean().reset_index()
     pivot = grouped.pivot(index="period", columns="site", values=value_col).sort_index()
     if agg_mode == "Week":
@@ -146,6 +158,9 @@ def _aggregate_pivot(df, value_col, agg_mode):
 
 
 def _format_pivot_index(pivot, mode):
+    if mode in ("Week", "Month"):
+        cutoff = _current_period_start(mode)
+        pivot = pivot[pivot.index < cutoff]
     if mode == "Week":
         pivot.index = pivot.index.strftime("W%V %Y")
     elif mode == "Month":
@@ -488,6 +503,8 @@ def _view_performance(date_from_str, date_to_str, aggregation):
                 wt["period"] = wt["date"].dt.to_period("M").dt.start_time
             else:
                 wt["period"] = wt["date"]
+            if aggregation in ("Week", "Month"):
+                wt = wt[wt["period"] < _current_period_start(aggregation)]
 
             agg = wt.groupby(["site", "period"]).agg(
                 total_count=("count", "sum"),
@@ -553,6 +570,9 @@ def _aggregate_pivot_sum(df, value_col, agg_mode):
         df["period"] = df["date"].dt.to_period("M").dt.start_time
     else:
         df["period"] = df["date"]
+    if agg_mode in ("Week", "Month"):
+        cutoff = _current_period_start(agg_mode)
+        df = df[df["period"] < cutoff]
     grouped = df.groupby(["site", "period"])[value_col].sum().reset_index()
     pivot = grouped.pivot(index="period", columns="site", values=value_col).sort_index()
     if agg_mode == "Week":
