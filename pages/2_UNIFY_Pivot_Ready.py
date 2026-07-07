@@ -124,29 +124,12 @@ with st.sidebar:
             )
             api_installation = installations[selected_idx]
 
-            st.caption(f"Today: **{date.today().strftime('%b %d, %Y')}**")
-
             if "api_date_range" not in st.session_state:
                 st.session_state.api_date_range = (
                     date.today() - timedelta(days=7), date.today(),
                 )
 
-            preset_defs = [
-                ("Yesterday", 1, 1),
-                ("Last 7 days", 7, 0),
-                ("Last 14 days", 14, 0),
-                ("Last 30 days", 30, 0),
-                ("Last 60 days", 60, 0),
-                ("Last 90 days", 90, 0),
-            ]
-            for label, days_back, end_offset in preset_defs:
-                if st.button(label, key=f"preset_{days_back}", use_container_width=True):
-                    st.session_state.api_date_range = (
-                        date.today() - timedelta(days=days_back),
-                        date.today() - timedelta(days=end_offset),
-                    )
-
-            st.divider()
+            st.caption(f"Today: **{date.today().strftime('%b %d, %Y')}**")
             date_val = st.date_input(
                 "Select date range",
                 value=st.session_state.api_date_range,
@@ -161,6 +144,35 @@ with st.sidebar:
             else:
                 api_date_from = date_val
                 api_date_to = None
+
+            preset_defs = [
+                ("Yesterday", 1, 1),
+                ("7 days", 7, 0),
+                ("14 days", 14, 0),
+                ("30 days", 30, 0),
+                ("60 days", 60, 0),
+                ("90 days", 90, 0),
+            ]
+            row1 = preset_defs[:3]
+            row2 = preset_defs[3:]
+            cols1 = st.columns(3)
+            for col, (label, days_back, end_offset) in zip(cols1, row1):
+                with col:
+                    if st.button(label, key=f"preset_{days_back}", use_container_width=True):
+                        st.session_state.api_date_range = (
+                            date.today() - timedelta(days=days_back),
+                            date.today() - timedelta(days=end_offset),
+                        )
+                        st.rerun()
+            cols2 = st.columns(3)
+            for col, (label, days_back, end_offset) in zip(cols2, row2):
+                with col:
+                    if st.button(label, key=f"preset_{days_back}", use_container_width=True):
+                        st.session_state.api_date_range = (
+                            date.today() - timedelta(days=days_back),
+                            date.today() - timedelta(days=end_offset),
+                        )
+                        st.rerun()
     else:
         uploaded_files = st.file_uploader(
             "Upload CSV files",
