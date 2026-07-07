@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_robot_state, query_bin_presentations,
+    query_port_wait_time_daily,
 )
 
 st.set_page_config(page_title="CUBE Analytics", page_icon="📊", layout="wide")
@@ -132,7 +133,7 @@ def aggregate_pivot(df, value_col, agg_mode):
 @st.cache_data(ttl=300, show_spinner=False)
 def load_all_data(date_from_str, date_to_str):
     installations = get_installations()
-    health_frames, uptime_frames, robot_frames, bp_frames = [], [], [], []
+    health_frames, uptime_frames, robot_frames, bp_frames, pwt_frames = [], [], [], [], []
 
     for inst in installations:
         iid, name = inst["id"], inst["name"]
@@ -157,11 +158,17 @@ def load_all_data(date_from_str, date_to_str):
             df_bp["site"] = name
             bp_frames.append(df_bp)
 
+        df_pwt = query_port_wait_time_daily(iid, date_from_str, date_to_str)
+        if not df_pwt.empty:
+            df_pwt["site"] = name
+            pwt_frames.append(df_pwt)
+
     return {
         "health": pd.concat(health_frames, ignore_index=True) if health_frames else pd.DataFrame(),
         "uptime": pd.concat(uptime_frames, ignore_index=True) if uptime_frames else pd.DataFrame(),
         "robot": pd.concat(robot_frames, ignore_index=True) if robot_frames else pd.DataFrame(),
         "bp": pd.concat(bp_frames, ignore_index=True) if bp_frames else pd.DataFrame(),
+        "pwt": pd.concat(pwt_frames, ignore_index=True) if pwt_frames else pd.DataFrame(),
     }
 
 
@@ -172,6 +179,7 @@ df_health = data["health"]
 df_uptime = data["uptime"]
 df_robot = data["robot"]
 df_bp = data["bp"]
+df_pwt = data["pwt"]
 
 if df_health.empty:
     st.warning("No data returned for the selected date range.")
@@ -274,33 +282,96 @@ if not df_health.empty and "mbbd" in df_health.columns:
 st.divider()
 st.header("Performance")
 
-# Wait Time (bin)
+# Overall Wait Time / Waste Time from system-health (no filter)
 if not df_health.empty and "wait_bin" in df_health.columns:
     pivot = aggregate_pivot(df_health, "wait_bin", aggregation)
-    fig = make_trend_chart(pivot, "Wait Time", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s")
+    fig = make_trend_chart(pivot, "Wait Time (system-level)", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s")
     st.pyplot(fig)
     plt.close(fig)
 
-# Waste Time
 if not df_health.empty and "waste_time" in df_health.columns:
     pivot = aggregate_pivot(df_health, "waste_time", aggregation)
-    fig = make_trend_chart(pivot, "Waste Time", "Waste Time (s)", threshold=0.5, threshold_label="Target < 0.5s")
+    fig = make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.5, threshold_label="Target < 0.5s")
     st.pyplot(fig)
     plt.close(fig)
 
-# Wait User (from bin presentations)
-if not df_bp.empty and "avg_wait_user" in df_bp.columns:
-    pivot = aggregate_pivot(df_bp, "avg_wait_user", aggregation)
-    fig = make_trend_chart(pivot, "Wait User", "Wait User (s)")
-    st.pyplot(fig)
-    plt.close(fig)
+# ── Filtered performance charts ──────────────────────────────────────────────
+st.subheader("Filtered by Pick Type / Category")
 
-# Bin Presentations count
-if not df_bp.empty and "bin_presentations" in df_bp.columns:
-    pivot = aggregate_pivot(df_bp, "bin_presentations", aggregation)
-    fig = make_trend_chart(pivot, "Bin Presentations", "Count")
-    st.pyplot(fig)
-    plt.close(fig)
+if not df_pwt.empty:
+    filter_col1, filter_col2 = st.columns(2)
+
+    all_pick_types = sorted(df_pwt["pick_type"].dropna().unique().tolist())
+    all_categories = sorted(df_pwt["category"].dropna().unique().tolist())
+    all_categories = [c for c in all_categories if c != ""]
+
+    with filter_col1:
+        selected_pick_types = st.multiselect(
+            "Pick type", all_pick_types, default=all_pick_types, key="perf_pick_type",
+        )
+    with filter_col2:
+        selected_categories = st.multiselect(
+            "Category", all_categories, default=all_categories, key="perf_category",
+        )
+
+    df_filtered = df_pwt.copy()
+    if selected_pick_types:
+        df_filtered = df_filtered[df_filtered["pick_type"].isin(selected_pick_types)]
+    if selected_categories:
+        df_filtered = df_filtered[df_filtered["category"].isin(selected_categories)]
+
+    if df_filtered.empty:
+        st.info("No data for the selected filters.")
+    else:
+        wt = df_filtered.copy()
+        wt["w_wait_bin"] = wt["average_wait_bin"] * wt["count"]
+        wt["w_wait_user"] = wt["average_wait_user"] * wt["count"]
+        wt["w_waste"] = wt["average_waste_time"] * wt["count"]
+
+        if aggregation == "Week":
+            wt["period"] = wt["date"].dt.to_period("W").dt.start_time
+        elif aggregation == "Month":
+            wt["period"] = wt["date"].dt.to_period("M").dt.start_time
+        else:
+            wt["period"] = wt["date"]
+
+        agg = wt.groupby(["site", "period"]).agg(
+            total_count=("count", "sum"),
+            sum_wait_bin=("w_wait_bin", "sum"),
+            sum_wait_user=("w_wait_user", "sum"),
+            sum_waste=("w_waste", "sum"),
+        ).reset_index()
+        agg["avg_wait_bin"] = agg["sum_wait_bin"] / agg["total_count"]
+        agg["avg_wait_user"] = agg["sum_wait_user"] / agg["total_count"]
+        agg["avg_waste"] = agg["sum_waste"] / agg["total_count"]
+
+        def _format_index(pivot, mode):
+            if mode == "Week":
+                pivot.index = pivot.index.strftime("W%V %Y")
+            elif mode == "Month":
+                pivot.index = pivot.index.strftime("%Y-%m")
+            else:
+                pivot.index = pivot.index.strftime("%Y-%m-%d")
+            return pivot
+
+        for metric, label, ylabel, thresh, thresh_label in [
+            ("avg_wait_bin", "Bin Wait Time (filtered)", "Wait Bin (s)", 2.0, "Target < 2s"),
+            ("avg_wait_user", "User Wait Time (filtered)", "Wait User (s)", None, None),
+            ("avg_waste", "Waste Time (filtered)", "Waste Time (s)", 0.5, "Target < 0.5s"),
+        ]:
+            piv = agg.pivot(index="period", columns="site", values=metric).sort_index()
+            piv = _format_index(piv, aggregation)
+            fig = make_trend_chart(piv, label, ylabel, threshold=thresh, threshold_label=thresh_label)
+            st.pyplot(fig)
+            plt.close(fig)
+
+        piv_count = agg.pivot(index="period", columns="site", values="total_count").sort_index()
+        piv_count = _format_index(piv_count, aggregation)
+        fig = make_trend_chart(piv_count, "Bin Presentations (filtered)", "Count")
+        st.pyplot(fig)
+        plt.close(fig)
+else:
+    st.info("No port wait time data available.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

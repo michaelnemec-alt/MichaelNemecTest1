@@ -208,12 +208,41 @@ def query_bin_presentations(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=300)
-def query_port_wait_time(installation_id, date_from_str, date_to_str):
-    """Fetch port-bin-wait-time data and return a DataFrame matching the CSV format.
+def query_port_wait_time_daily(installation_id, date_from_str, date_to_str):
+    url = f"{BASE_URL}/installations/{installation_id}/port-bin-wait-time/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
 
-    Columns: Timestamp, Port ID, Pick type, Count,
-             Average bin wait time, Average operator handling time, Category
-    """
+    rows = []
+    for day_result in results:
+        date_str = day_result.get("date")
+        port_data = day_result.get("result", {}).get("port_hour_wait_time", {})
+        for port_id_str, records in port_data.items():
+            for rec in records:
+                if rec.get("subtype") != "BIN_PRESENTATIONS":
+                    continue
+                cat = rec.get("category")
+                rows.append({
+                    "date": date_str,
+                    "port_id": int(port_id_str),
+                    "pick_type": rec.get("pick_type", ""),
+                    "category": str(int(cat)) if cat is not None else "",
+                    "count": rec.get("count", 0),
+                    "average_wait_bin": rec.get("average_wait_bin", 0),
+                    "average_wait_user": rec.get("average_wait_user", 0),
+                    "average_waste_time": rec.get("average_waste_time", 0),
+                })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=300)
+def query_port_wait_time(installation_id, date_from_str, date_to_str):
+    """Fetch port-bin-wait-time data and return a DataFrame matching the CSV format."""
     url = f"{BASE_URL}/installations/{installation_id}/port-bin-wait-time/"
     params = {"after": date_from_str, "before": date_to_str}
     results = _fetch_all_pages(url, params)
