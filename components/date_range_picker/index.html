@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: transparent; overflow: hidden; }
+
+  .drp-trigger {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 14px; border: 1px solid #e0e0e0; border-radius: 8px;
+    background: #fff; cursor: pointer; font-size: 13px; color: #333;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    width: 100%;
+  }
+  .drp-trigger:hover { border-color: #4A90D9; box-shadow: 0 0 0 2px rgba(74,144,217,0.08); }
+  .drp-trigger .icon { font-size: 14px; }
+  .drp-trigger .dates { flex: 1; font-weight: 500; }
+  .drp-trigger .arrow { font-size: 9px; color: #aaa; transition: transform 0.3s; }
+  .drp-trigger.open .arrow { transform: rotate(180deg); }
+
+  .drp-panel {
+    max-height: 0; overflow: hidden; opacity: 0;
+    transition: max-height 0.35s cubic-bezier(.4,0,.2,1), opacity 0.25s, margin 0.3s;
+    margin-top: 0; background: #fff; border-radius: 10px;
+  }
+  .drp-panel.show {
+    max-height: 700px; opacity: 1; margin-top: 8px;
+    border: 1px solid #eee; box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+  }
+
+  .drp-presets {
+    display: flex; flex-wrap: wrap; gap: 5px; padding: 12px 12px 8px;
+  }
+  .drp-preset-btn {
+    padding: 5px 10px; border: 1px solid #e8e8e8; background: #fafafa; border-radius: 16px;
+    font-size: 11px; color: #555; cursor: pointer; font-weight: 500;
+    transition: all 0.15s;
+  }
+  .drp-preset-btn:hover { background: #f0f4ff; border-color: #c0d4f0; color: #4A90D9; }
+  .drp-preset-btn.active { background: #4A90D9; border-color: #4A90D9; color: #fff; }
+
+  .drp-divider { height: 1px; background: #f0f0f0; margin: 0 12px; }
+
+  .drp-cal { padding: 10px 12px; }
+  .drp-cal-nav {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 8px;
+  }
+  .drp-cal-nav button {
+    width: 26px; height: 26px; border: none; background: #f5f5f5; border-radius: 50%;
+    cursor: pointer; font-size: 14px; color: #555; display: flex; align-items: center;
+    justify-content: center; transition: background 0.15s;
+  }
+  .drp-cal-nav button:hover { background: #e0e0e0; }
+  .drp-cal-title { font-size: 13px; font-weight: 600; color: #333; }
+
+  .drp-weekdays {
+    display: grid; grid-template-columns: repeat(7, 1fr); margin-bottom: 2px;
+  }
+  .drp-weekdays span {
+    text-align: center; font-size: 9px; font-weight: 700; color: #bbb;
+    text-transform: uppercase; padding: 3px 0; letter-spacing: 0.5px;
+  }
+
+  .drp-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+  .drp-day {
+    height: 30px; border: none; background: transparent; border-radius: 6px;
+    font-size: 12px; color: #333; cursor: pointer; display: flex; align-items: center;
+    justify-content: center; transition: background 0.12s, color 0.12s;
+  }
+  .drp-day:hover:not(.disabled):not(.empty) { background: #f0f4ff; }
+  .drp-day.empty { cursor: default; }
+  .drp-day.disabled { color: #ddd; cursor: not-allowed; }
+  .drp-day.today { font-weight: 700; color: #4A90D9; }
+  .drp-day.selected { background: #4A90D9; color: #fff; font-weight: 600; border-radius: 50%; }
+  .drp-day.in-range { background: #e8f0fe; border-radius: 0; }
+  .drp-day.range-start { background: #4A90D9; color: #fff; border-radius: 50% 0 0 50%; font-weight: 600; }
+  .drp-day.range-end { background: #4A90D9; color: #fff; border-radius: 0 50% 50% 0; font-weight: 600; }
+  .drp-day.range-start.range-end { border-radius: 50%; }
+
+  .drp-footer {
+    padding: 8px 12px 12px; display: flex; gap: 8px;
+  }
+  .drp-footer button {
+    flex: 1; padding: 8px; border-radius: 8px; font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: background 0.15s, transform 0.1s;
+  }
+  .drp-footer button:active { transform: scale(0.97); }
+  .drp-cancel { border: 1px solid #e0e0e0; background: #fff; color: #666; }
+  .drp-cancel:hover { background: #f5f5f5; }
+  .drp-done { border: none; background: #4A90D9; color: #fff; }
+  .drp-done:hover { background: #3a7bc8; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="drp-trigger" id="trigger" onclick="togglePanel()">
+    <span class="icon">&#128197;</span>
+    <span class="dates" id="triggerText">Loading...</span>
+    <span class="arrow">&#9662;</span>
+  </div>
+
+  <div class="drp-panel" id="panel">
+    <div class="drp-presets" id="presets">
+      <button class="drp-preset-btn" onclick="applyPreset(1,1,this)">Yesterday</button>
+      <button class="drp-preset-btn" onclick="applyPreset(7,0,this)">7 days</button>
+      <button class="drp-preset-btn" onclick="applyPreset(14,0,this)">14 days</button>
+      <button class="drp-preset-btn" onclick="applyPreset(30,0,this)">30 days</button>
+      <button class="drp-preset-btn" onclick="applyPreset(60,0,this)">60 days</button>
+      <button class="drp-preset-btn" onclick="applyPreset(90,0,this)">90 days</button>
+    </div>
+    <div class="drp-divider"></div>
+    <div class="drp-cal" id="cal-month"></div>
+    <div class="drp-footer">
+      <button class="drp-cancel" onclick="cancelSelection()">Cancel</button>
+      <button class="drp-done" onclick="applySelection()">Done</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const WDAYS = ["Mo","Tu","We","Th","Fr","Sa","Su"];
+const today = new Date(); today.setHours(0,0,0,0);
+
+let selFrom = null, selTo = null;
+let savedFrom = null, savedTo = null;
+let viewMonth, viewYear;
+let isOpen = false, initialized = false;
+
+function parseDate(s) {
+  const p = s.split("-"); return new Date(+p[0], +p[1]-1, +p[2]);
+}
+function fmtDate(d) {
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+function fmtShort(d) {
+  return MONTHS[d.getMonth()].slice(0,3)+" "+d.getDate()+", "+d.getFullYear();
+}
+function fmtCompact(d) {
+  return MONTHS[d.getMonth()].slice(0,3)+" "+d.getDate();
+}
+
+function updateTrigger() {
+  if (selFrom && selTo) {
+    const sameYear = selFrom.getFullYear() === selTo.getFullYear();
+    const t = sameYear
+      ? fmtCompact(selFrom) + " \u2013 " + fmtCompact(selTo) + ", " + selTo.getFullYear()
+      : fmtShort(selFrom) + " \u2013 " + fmtShort(selTo);
+    document.getElementById("triggerText").textContent = t;
+  }
+}
+
+function setFrameH() {
+  if (!window.Streamlit) return;
+  if (isOpen) {
+    requestAnimationFrame(() => {
+      const h = document.getElementById("root").scrollHeight + 4;
+      window.Streamlit.setFrameHeight(h);
+    });
+  } else {
+    window.Streamlit.setFrameHeight(44);
+  }
+}
+
+function togglePanel() {
+  isOpen = !isOpen;
+  document.getElementById("panel").classList.toggle("show", isOpen);
+  document.getElementById("trigger").classList.toggle("open", isOpen);
+  if (isOpen) {
+    savedFrom = selFrom ? new Date(selFrom) : null;
+    savedTo = selTo ? new Date(selTo) : null;
+    viewMonth = selFrom ? selFrom.getMonth() : today.getMonth();
+    viewYear = selFrom ? selFrom.getFullYear() : today.getFullYear();
+    renderMonth();
+  }
+  setTimeout(setFrameH, 50);
+  setTimeout(setFrameH, 400);
+}
+
+function prevMonth() {
+  viewMonth--;
+  if (viewMonth < 0) { viewMonth = 11; viewYear--; }
+  renderMonth();
+}
+function nextMonth() {
+  const nm = viewMonth + 1 > 11 ? 0 : viewMonth + 1;
+  const ny = viewMonth + 1 > 11 ? viewYear + 1 : viewYear;
+  if (ny > today.getFullYear() || (ny === today.getFullYear() && nm > today.getMonth())) return;
+  viewMonth++;
+  if (viewMonth > 11) { viewMonth = 0; viewYear++; }
+  renderMonth();
+}
+
+function renderMonth() {
+  const el = document.getElementById("cal-month");
+  let html = '<div class="drp-cal-nav">';
+  html += '<button onclick="prevMonth()">&#8249;</button>';
+  html += '<span class="drp-cal-title">' + MONTHS[viewMonth] + ' ' + viewYear + '</span>';
+  html += '<button onclick="nextMonth()">&#8250;</button>';
+  html += '</div>';
+  html += '<div class="drp-weekdays">';
+  WDAYS.forEach(w => html += '<span>' + w + '</span>');
+  html += '</div><div class="drp-days">';
+
+  const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+  const offset = (firstDay + 6) % 7;
+  for (let i = 0; i < offset; i++) html += '<div class="drp-day empty"></div>';
+
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dt = new Date(viewYear, viewMonth, d);
+    let cls = "drp-day";
+    if (dt > today) { cls += " disabled"; }
+    else {
+      if (dt.getTime() === today.getTime()) cls += " today";
+      if (selFrom && selTo) {
+        const ft = selFrom.getTime(), tt = selTo.getTime(), ct = dt.getTime();
+        if (ct === ft && ct === tt) cls += " selected range-start range-end";
+        else if (ct === ft) cls += " range-start";
+        else if (ct === tt) cls += " range-end";
+        else if (ct > ft && ct < tt) cls += " in-range";
+      } else if (selFrom && dt.getTime() === selFrom.getTime()) {
+        cls += " selected";
+      }
+    }
+    html += '<div class="' + cls + '" onclick="pickDay(' + viewYear + ',' + viewMonth + ',' + d + ')">' + d + '</div>';
+  }
+  html += '</div>';
+  el.innerHTML = html;
+  setTimeout(setFrameH, 20);
+}
+
+function pickDay(y, m, d) {
+  const dt = new Date(y, m, d);
+  if (dt > today) return;
+  if (!selFrom || (selFrom && selTo)) {
+    selFrom = dt; selTo = null;
+  } else {
+    if (dt < selFrom) { selTo = new Date(selFrom); selFrom = dt; }
+    else { selTo = dt; }
+  }
+  document.querySelectorAll(".drp-preset-btn").forEach(b => b.classList.remove("active"));
+  updateTrigger();
+  renderMonth();
+}
+
+function applyPreset(daysBack, endOff, btn) {
+  selFrom = new Date(today); selFrom.setDate(selFrom.getDate() - daysBack);
+  selTo = new Date(today); selTo.setDate(selTo.getDate() - endOff);
+  document.querySelectorAll(".drp-preset-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  viewMonth = selFrom.getMonth();
+  viewYear = selFrom.getFullYear();
+  updateTrigger();
+  renderMonth();
+}
+
+function cancelSelection() {
+  selFrom = savedFrom; selTo = savedTo;
+  updateTrigger();
+  isOpen = false;
+  document.getElementById("panel").classList.remove("show");
+  document.getElementById("trigger").classList.remove("open");
+  setTimeout(setFrameH, 50);
+  setTimeout(setFrameH, 400);
+}
+
+function applySelection() {
+  if (selFrom && selTo) {
+    isOpen = false;
+    document.getElementById("panel").classList.remove("show");
+    document.getElementById("trigger").classList.remove("open");
+    updateTrigger();
+    setTimeout(setFrameH, 50);
+    setTimeout(setFrameH, 400);
+    if (window.Streamlit) {
+      window.Streamlit.setComponentValue({"from": fmtDate(selFrom), "to": fmtDate(selTo)});
+    }
+  }
+}
+
+function onRender(event) {
+  const args = event.detail.args || event.detail;
+  if (!initialized && args.date_from && args.date_to) {
+    selFrom = parseDate(args.date_from);
+    selTo = parseDate(args.date_to);
+    viewMonth = selFrom.getMonth();
+    viewYear = selFrom.getFullYear();
+    updateTrigger();
+    initialized = true;
+  }
+  setFrameH();
+}
+
+function initStreamlit() {
+  if (window.Streamlit) {
+    window.Streamlit.setComponentReady();
+    window.Streamlit.setFrameHeight(44);
+  }
+}
+
+window.addEventListener("message", function(e) {
+  if (e.data && e.data.type === "streamlit:render") {
+    const args = e.data.args || {};
+    onRender({detail: {args: args}});
+  }
+});
+
+if (window.Streamlit) {
+  if (window.Streamlit.events) {
+    window.Streamlit.events.addEventListener("streamlit:render", onRender);
+  }
+  initStreamlit();
+} else {
+  window.addEventListener("load", function() {
+    setTimeout(initStreamlit, 100);
+  });
+}
+</script>
+</body>
+</html>

@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import date, timedelta
 
+from components.date_range_picker import date_range_picker
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_robot_state, query_bin_presentations,
@@ -115,34 +116,21 @@ def render():
         selected_view = st.selectbox("Dashboard view", VIEWS, index=0, key="cube_view")
         st.divider()
 
-        if "cube_date_range" not in st.session_state:
-            st.session_state.cube_date_range = (date.today() - timedelta(days=30), date.today())
+        if "cube_date_from" not in st.session_state:
+            st.session_state.cube_date_from = str(date.today() - timedelta(days=30))
+            st.session_state.cube_date_to = str(date.today())
 
-        st.caption(f"Today: **{date.today().strftime('%b %d, %Y')}**")
-        date_val = st.date_input("Select date range", value=st.session_state.cube_date_range,
-                                  max_value=date.today(), key="cube_date_input")
-        if isinstance(date_val, tuple) and len(date_val) == 2:
-            dt_from, dt_to = date_val
-            st.session_state.cube_date_range = date_val
-        elif isinstance(date_val, tuple) and len(date_val) == 1:
-            dt_from, dt_to = date_val[0], None
-        else:
-            dt_from, dt_to = date_val, None
+        date_result = date_range_picker(
+            date_from=st.session_state.cube_date_from,
+            date_to=st.session_state.cube_date_to,
+            key="cube_drp",
+        )
+        if date_result:
+            st.session_state.cube_date_from = date_result["from"]
+            st.session_state.cube_date_to = date_result["to"]
 
-        preset_defs = [
-            ("Yesterday", 1, 1), ("7 days", 7, 0), ("14 days", 14, 0),
-            ("30 days", 30, 0), ("60 days", 60, 0), ("90 days", 90, 0),
-        ]
-        for row_presets in [preset_defs[:3], preset_defs[3:]]:
-            cols = st.columns(3)
-            for col, (label, days_back, end_offset) in zip(cols, row_presets):
-                with col:
-                    if st.button(label, key=f"cube_preset_{days_back}", use_container_width=True):
-                        st.session_state.cube_date_range = (
-                            date.today() - timedelta(days=days_back),
-                            date.today() - timedelta(days=end_offset),
-                        )
-                        st.rerun()
+        dt_from = date.fromisoformat(st.session_state.cube_date_from)
+        dt_to = date.fromisoformat(st.session_state.cube_date_to)
 
         st.divider()
         aggregation = st.radio("Aggregation", ["Day", "Week", "Month"], index=1, horizontal=True, key="cube_agg")
