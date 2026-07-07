@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import date, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
@@ -99,11 +100,20 @@ def _format_pivot_index(pivot, mode):
 def _load_for_sites(query_fn, date_from_str, date_to_str):
     installations = get_installations()
     frames = []
-    for inst in installations:
+
+    def _fetch(inst):
         df = query_fn(inst["id"], date_from_str, date_to_str)
         if not df.empty:
             df["site"] = inst["name"]
-            frames.append(df)
+            return df
+        return None
+
+    with ThreadPoolExecutor(max_workers=len(installations)) as pool:
+        futures = {pool.submit(_fetch, inst): inst for inst in installations}
+        for f in as_completed(futures):
+            result = f.result()
+            if result is not None:
+                frames.append(result)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
@@ -260,11 +270,17 @@ The dashed green line at 4.0 = target threshold.""")
 
 def _view_error_health(date_from_str, date_to_str, aggregation):
     with st.spinner("Loading uptime, robot state, and health data..."):
-        df_health = _load_for_sites(query_system_health, date_from_str, date_to_str)
-        df_uptime = _load_for_sites(query_uptime, date_from_str, date_to_str)
-        df_robot = _load_for_sites(query_robot_state, date_from_str, date_to_str)
-        df_port_uptime = _load_for_sites(query_port_uptime, date_from_str, date_to_str)
-        df_incidents = _load_for_sites(query_incidents, date_from_str, date_to_str)
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
+            f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
+            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
+            f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
+            f_incidents = pool.submit(_load_for_sites, query_incidents, date_from_str, date_to_str)
+        df_health = f_health.result()
+        df_uptime = f_uptime.result()
+        df_robot = f_robot.result()
+        df_port_uptime = f_port.result()
+        df_incidents = f_incidents.result()
 
     if df_health.empty:
         st.warning("No data returned.")
@@ -309,8 +325,11 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
 
 def _view_performance(date_from_str, date_to_str, aggregation):
     with st.spinner("Loading performance data..."):
-        df_health = _load_for_sites(query_system_health, date_from_str, date_to_str)
-        df_pwt = _load_for_sites(query_port_wait_time_daily, date_from_str, date_to_str)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
+            f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
+        df_health = f_health.result()
+        df_pwt = f_pwt.result()
 
     if df_health.empty:
         st.warning("No data returned.")
@@ -389,8 +408,11 @@ def _view_performance(date_from_str, date_to_str, aggregation):
 
 def _view_battery_robots(date_from_str, date_to_str, aggregation):
     with st.spinner("Loading battery and robot data..."):
-        df_health = _load_for_sites(query_system_health, date_from_str, date_to_str)
-        df_robot = _load_for_sites(query_robot_state, date_from_str, date_to_str)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
+            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
+        df_health = f_health.result()
+        df_robot = f_robot.result()
 
     if df_health.empty:
         st.warning("No data returned.")
