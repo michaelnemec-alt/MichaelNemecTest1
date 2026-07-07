@@ -33,6 +33,25 @@ section[data-testid="stSidebar"] button {
 }
 
 .footer { text-align:center; color:#d1d5db; font-size:0.78em; padding:40px 0 10px 0; }
+
+/* CUBE Analytics dropdown popover button */
+[data-testid="stPopoverButton"] > button {
+    background: linear-gradient(135deg, #1F3864 0%, #2c4f8a 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 8px 20px !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    min-height: 38px !important;
+    box-shadow: 0 2px 8px rgba(31, 56, 100, 0.3) !important;
+    transition: all 0.3s ease !important;
+}
+[data-testid="stPopoverButton"] > button:hover {
+    background: linear-gradient(135deg, #2c4f8a 0%, #3a6bb5 100%) !important;
+    box-shadow: 0 4px 12px rgba(31, 56, 100, 0.4) !important;
+    transform: translateY(-1px) !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -54,15 +73,17 @@ if not selected:
     selected = "Home"
 
 if selected == "CUBE Analytics":
-    cube_view = st.segmented_control(
-        "cube_nav",
-        options=CUBE_VIEWS,
-        default="Overview & Health",
-        key="cube_nav_selection",
-        label_visibility="collapsed",
-    )
+    with st.popover("☰ CUBE Analytics — Select View", use_container_width=False):
+        cube_view = st.radio(
+            "Dashboard view",
+            CUBE_VIEWS,
+            index=0,
+            key="cube_nav_selection",
+            label_visibility="collapsed",
+        )
     if not cube_view:
         cube_view = "Overview & Health"
+    st.markdown(f"<p style='font-size:0.9em; color:#6b7280; margin:-8px 0 0 0;'>Viewing: <b style=\"color:#1F3864;\">{cube_view}</b></p>", unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
