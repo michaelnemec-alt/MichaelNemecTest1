@@ -261,14 +261,35 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         st.warning("No data returned for the selected date range.")
         return
 
-    st.markdown("#### Current Health — All Sites")
-    latest_date = df_health["date"].max()
-    latest = df_health[df_health["date"] == latest_date][[
-        "site", "health_index", "uptime", "wait_bin", "waste_time",
-        "average_battery_score", "mtbf_h", "packet_loss", "mbbd",
-    ]].copy()
+    today = date.today()
+    if aggregation == "Week":
+        period_end = today - timedelta(days=today.isoweekday())
+        period_start = period_end - timedelta(days=6)
+        period_label = f"W{period_start.isocalendar()[1]} ({period_start} — {period_end})"
+    elif aggregation == "Month":
+        first_of_month = today.replace(day=1)
+        period_end = first_of_month - timedelta(days=1)
+        period_start = period_end.replace(day=1)
+        period_label = period_start.strftime("%B %Y")
+    else:
+        period_start = today - timedelta(days=1)
+        period_end = period_start
+        period_label = period_start.strftime("%Y-%m-%d")
+
+    period_df = df_health[
+        (df_health["date"].dt.date >= period_start) & (df_health["date"].dt.date <= period_end)
+    ]
+    if period_df.empty:
+        period_df = df_health[df_health["date"] == df_health["date"].max()]
+        period_label += " (fallback: latest available)"
+
+    metrics = ["health_index", "uptime", "wait_bin", "waste_time",
+               "average_battery_score", "mtbf_h", "packet_loss", "mbbd"]
+    latest = period_df.groupby("site")[metrics].mean().reset_index()
     latest.columns = ["Site", "Health", "Uptime %", "Wait (s)", "Waste (s)", "Battery", "MTBF (h)", "Pkt Loss %", "MBBD"]
     latest = latest.sort_values("Health", ascending=False).reset_index(drop=True)
+
+    st.markdown(f"#### Health — All Sites")
 
     latest["Health"] = latest["Health"].round(2)
     latest["Uptime %"] = latest["Uptime %"].round(2)
@@ -312,7 +333,7 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         })
     )
     st.dataframe(styled, use_container_width=True, hide_index=True)
-    st.caption(f"Data from: {latest_date.strftime('%Y-%m-%d')}")
+    st.caption(f"Period: {period_label}")
 
     pivot = _aggregate_pivot(df_health, "health_index", aggregation)
     _chart_title_with_info("Health Index")
