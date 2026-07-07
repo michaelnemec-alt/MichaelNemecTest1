@@ -91,7 +91,7 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
             annotation_font_color="#7ab648",
         )
     fig.update_layout(
-        title=dict(text=title, font=dict(size=14, color="#1F3864"), x=0),
+        title=dict(text="", font=dict(size=1)),
         yaxis_title=ylabel,
         xaxis_tickangle=-45,
         xaxis_tickfont=dict(size=9),
