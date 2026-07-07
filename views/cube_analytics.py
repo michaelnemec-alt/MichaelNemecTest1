@@ -50,10 +50,10 @@ METRIC_INFO = {
     "Robot Uptime": "Percentage of total robot time spent in productive or ready states (100% minus recovery, unavailable, service off grid, and parked on grid). Higher is better.",
     "Error Stopped System True": "Count of robot errors per day that caused the AutoStore system to stop. These are critical errors requiring immediate intervention. Lower is better.",
     "Error Stopped System False": "Count of robot errors per day that were resolved without stopping the system. The system continued operating while the error was handled. High counts are normal.",
-    "Operations Errors %": "Percentage of total robot errors classified as operations problems (is_bin_quality=True and is_port=False). These are errors caused by bin handling issues that can be improved through better operational practices.",
-    "Facility Errors %": "Percentage of total robot errors classified as facility/technical problems (is_bin_quality=False). These are mechanical or infrastructure issues requiring maintenance or engineering intervention.",
-    "Operations Errors": "Count of robot errors classified as operations problems (is_bin_quality=True and is_port=False). Bin handling issues.",
-    "Facility Errors": "Count of robot errors classified as facility/technical problems (is_bin_quality=False). Mechanical or infrastructure issues.",
+    "Errors caused by Operations %": "Percentage of total robot errors caused by operations problems (is_bin_quality=True and is_port=False). These are bin handling issues that can be improved through better operational practices.",
+    "Errors caused by Facility %": "Percentage of total robot errors caused by facility/technical problems (is_bin_quality=False). These are mechanical or infrastructure issues requiring maintenance or engineering intervention.",
+    "Errors caused by Operations": "Count of robot errors caused by operations problems (is_bin_quality=True and is_port=False). Bin handling issues.",
+    "Errors caused by Facility": "Count of robot errors caused by facility/technical problems (is_bin_quality=False). Mechanical or infrastructure issues.",
 }
 
 
@@ -645,11 +645,11 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
             pivot_ops_pct = (pivot_ops_sum / pivot_total * 100).fillna(0)
             pivot_fac_pct = (pivot_fac_sum / pivot_total * 100).fillna(0)
 
-            _chart_title_with_info("Operations Errors %")
-            st.plotly_chart(_make_trend_chart(pivot_ops_pct, "Operations Errors %", "%", pct=True), use_container_width=True)
+            _chart_title_with_info("Errors caused by Operations %")
+            st.plotly_chart(_make_trend_chart(pivot_ops_pct, "Errors caused by Operations %", "%", pct=True), use_container_width=True)
 
-            _chart_title_with_info("Facility Errors %")
-            st.plotly_chart(_make_trend_chart(pivot_fac_pct, "Facility Errors %", "%", pct=True), use_container_width=True)
+            _chart_title_with_info("Errors caused by Facility %")
+            st.plotly_chart(_make_trend_chart(pivot_fac_pct, "Errors caused by Facility %", "%", pct=True), use_container_width=True)
 
             st.divider()
             st.markdown("#### Error Stopped System")
@@ -663,10 +663,10 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
             st.plotly_chart(_make_trend_chart(pivot_false, "Error Stopped System False", "Count"), use_container_width=True)
 
             st.divider()
-            st.markdown("#### Operations vs Facility — Counts")
+            st.markdown("#### Errors caused by Operations vs Facility — Counts")
 
-            _chart_title_with_info("Operations Errors")
-            st.plotly_chart(_make_trend_chart(pivot_ops_sum, "Operations Errors", "Count"), use_container_width=True)
+            _chart_title_with_info("Errors caused by Operations")
+            st.plotly_chart(_make_trend_chart(pivot_ops_sum, "Errors caused by Operations", "Count"), use_container_width=True)
 
-            _chart_title_with_info("Facility Errors")
-            st.plotly_chart(_make_trend_chart(pivot_fac_sum, "Facility Errors", "Count"), use_container_width=True)
+            _chart_title_with_info("Errors caused by Facility")
+            st.plotly_chart(_make_trend_chart(pivot_fac_sum, "Errors caused by Facility", "Count"), use_container_width=True)
