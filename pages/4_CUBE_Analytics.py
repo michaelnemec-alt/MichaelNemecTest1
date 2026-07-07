@@ -121,11 +121,11 @@ if df_all.empty:
 
 # ── Aggregate ────────────────────────────────────────────────────────────────
 if aggregation == "Week":
-    df_all["period"] = df_all["date"].dt.to_period("W").apply(lambda p: p.start_time)
+    df_all["period"] = df_all["date"].dt.to_period("W").apply(lambda p: p.start_time).dt.normalize()
 elif aggregation == "Month":
-    df_all["period"] = df_all["date"].dt.to_period("M").apply(lambda p: p.start_time)
+    df_all["period"] = df_all["date"].dt.to_period("M").apply(lambda p: p.start_time).dt.normalize()
 else:
-    df_all["period"] = df_all["date"]
+    df_all["period"] = df_all["date"].dt.normalize()
 
 numeric_cols = list(HEALTH_COLS.keys())
 agg_df = df_all.groupby(["site", "period"])[numeric_cols].mean().reset_index()
@@ -177,6 +177,7 @@ metric_choice = st.selectbox(
 )
 
 pivot = agg_df.pivot(index="period", columns="site", values=metric_choice).sort_index()
+pivot.index = pivot.index.strftime("%Y-%m-%d")
 st.line_chart(pivot, use_container_width=True)
 
 # ── Per-site detail ──────────────────────────────────────────────────────────
@@ -200,11 +201,13 @@ if not site_df.empty:
         chart_data = site_df.set_index("period")[["health_index", "uptime"]].rename(
             columns={"health_index": "Health Index", "uptime": "Uptime %"}
         )
+        chart_data.index = chart_data.index.strftime("%Y-%m-%d")
         st.line_chart(chart_data)
     with col2:
         chart_data2 = site_df.set_index("period")[["wait_bin", "waste_time"]].rename(
             columns={"wait_bin": "Wait Bin (s)", "waste_time": "Waste Time (s)"}
         )
+        chart_data2.index = chart_data2.index.strftime("%Y-%m-%d")
         st.line_chart(chart_data2)
 
 # ── Download ─────────────────────────────────────────────────────────────────
