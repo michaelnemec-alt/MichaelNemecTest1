@@ -124,24 +124,43 @@ with st.sidebar:
             )
             api_installation = installations[selected_idx]
 
-            presets = {
-                "Yesterday": (date.today() - timedelta(days=1), date.today() - timedelta(days=1)),
-                "Last 7 days": (date.today() - timedelta(days=7), date.today()),
-                "Last 14 days": (date.today() - timedelta(days=14), date.today()),
-                "Last 30 days": (date.today() - timedelta(days=30), date.today()),
-                "Custom": None,
-            }
-            preset = st.radio("Date range", list(presets.keys()), index=1, horizontal=True)
+            st.caption(f"Today: **{date.today().strftime('%b %d, %Y')}**")
 
-            if preset != "Custom":
-                api_date_from, api_date_to = presets[preset]
-                st.caption(f"{api_date_from} → {api_date_to}")
+            if "api_date_range" not in st.session_state:
+                st.session_state.api_date_range = (
+                    date.today() - timedelta(days=7), date.today(),
+                )
+
+            preset_defs = [
+                ("Yesterday", 1, 1),
+                ("Last 7 days", 7, 0),
+                ("Last 14 days", 14, 0),
+                ("Last 30 days", 30, 0),
+                ("Last 60 days", 60, 0),
+                ("Last 90 days", 90, 0),
+            ]
+            for label, days_back, end_offset in preset_defs:
+                if st.button(label, key=f"preset_{days_back}", use_container_width=True):
+                    st.session_state.api_date_range = (
+                        date.today() - timedelta(days=days_back),
+                        date.today() - timedelta(days=end_offset),
+                    )
+
+            st.divider()
+            date_val = st.date_input(
+                "Select date range",
+                value=st.session_state.api_date_range,
+                max_value=date.today(),
+            )
+            if isinstance(date_val, tuple) and len(date_val) == 2:
+                api_date_from, api_date_to = date_val
+                st.session_state.api_date_range = date_val
+            elif isinstance(date_val, tuple) and len(date_val) == 1:
+                api_date_from = date_val[0]
+                api_date_to = None
             else:
-                col_f, col_t = st.columns(2)
-                with col_f:
-                    api_date_from = st.date_input("From", value=date.today() - timedelta(days=7))
-                with col_t:
-                    api_date_to = st.date_input("To", value=date.today())
+                api_date_from = date_val
+                api_date_to = None
     else:
         uploaded_files = st.file_uploader(
             "Upload CSV files",
@@ -190,7 +209,11 @@ if data_source == "CubeAnalytics API":
         st.info("👈 Select an installation in the left panel.")
         st.stop()
 
-    if api_date_from and api_date_to and api_date_from > api_date_to:
+    if not api_date_from or not api_date_to:
+        st.info("Select both start and end dates in the calendar.")
+        st.stop()
+
+    if api_date_from > api_date_to:
         st.error("'From' date must be before 'To' date.")
         st.stop()
 
