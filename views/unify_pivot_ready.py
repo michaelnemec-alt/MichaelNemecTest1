@@ -147,7 +147,9 @@ def render():
                                           max_value=date.today(), key="unify_dates")
                 if isinstance(date_val, tuple) and len(date_val) == 2:
                     api_date_from, api_date_to = date_val
-                    st.session_state.unify_date_range = date_val
+                    if date_val != st.session_state.unify_date_range:
+                        st.session_state.unify_date_range = date_val
+                        st.session_state.unify_preset = "Custom"
                 elif isinstance(date_val, tuple) and len(date_val) == 1:
                     api_date_from = date_val[0]
                 else:

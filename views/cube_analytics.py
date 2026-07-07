@@ -55,7 +55,7 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
         xaxis_tickangle=-45,
         xaxis_tickfont=dict(size=9),
         yaxis_tickfont=dict(size=10),
-        yaxis_tickformat=".1f%" if pct else None,
+        yaxis_tickformat=".2f" if pct else ".2f",
         legend=dict(font=dict(size=9), orientation="v", yanchor="top", y=1, xanchor="left", x=1.02),
         height=380,
         margin=dict(l=60, r=200, t=40, b=60),
@@ -151,7 +151,9 @@ def render(selected_view="Overview & Health"):
                                   max_value=date.today(), key="cube_custom_dt")
         if isinstance(date_val, tuple) and len(date_val) == 2:
             dt_from, dt_to = date_val
-            st.session_state.cube_custom_range = date_val
+            if date_val != st.session_state.cube_custom_range:
+                st.session_state.cube_custom_range = date_val
+                st.session_state.cube_preset = "Custom"
         else:
             dt_from, dt_to = (date_val[0] if isinstance(date_val, tuple) else date_val), None
 
