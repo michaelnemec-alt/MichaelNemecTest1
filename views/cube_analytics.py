@@ -360,7 +360,7 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
         st.warning("No data returned.")
         return
 
-    st.markdown("#### Error & Health Metrics")
+    st.markdown("#### Uptime")
 
     if not df_uptime.empty:
         df_uptime["system_uptime_pct"] = df_uptime["recovery_up_ratio"] * 100
@@ -368,16 +368,22 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
         _chart_title_with_info("System Uptime")
         st.plotly_chart(_make_trend_chart(pivot, "System Uptime", "Uptime", threshold=99.7, threshold_label="Target 99.7%", pct=True), use_container_width=True)
 
+    if not df_port_uptime.empty:
+        pivot = _aggregate_pivot(df_port_uptime, "uptime_pct", aggregation)
+        _chart_title_with_info("Port Uptime")
+        st.plotly_chart(_make_trend_chart(pivot, "Port Uptime", "Uptime %", pct=True), use_container_width=True)
+
+    st.divider()
+    st.markdown("#### Availability")
+
     if not df_uptime.empty:
         df_uptime["system_availability_pct"] = df_uptime["up_ratio"] * 100
         pivot = _aggregate_pivot(df_uptime, "system_availability_pct", aggregation)
         _chart_title_with_info("System Availability")
         st.plotly_chart(_make_trend_chart(pivot, "System Availability", "Availability", pct=True), use_container_width=True)
 
-    if not df_port_uptime.empty:
-        pivot = _aggregate_pivot(df_port_uptime, "uptime_pct", aggregation)
-        _chart_title_with_info("Port Uptime")
-        st.plotly_chart(_make_trend_chart(pivot, "Port Uptime", "Uptime %", pct=True), use_container_width=True)
+    st.divider()
+    st.markdown("#### Errors & Reliability")
 
     if not df_incidents.empty:
         pivot = _aggregate_pivot(df_incidents, "incident_count", aggregation)
