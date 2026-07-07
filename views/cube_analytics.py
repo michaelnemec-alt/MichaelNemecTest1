@@ -274,8 +274,8 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         return "background-color: #ffc7ce"
 
     styled = (latest.style
-        .applymap(_color_health, subset=["Health"])
-        .applymap(_color_uptime, subset=["Uptime %"])
+        .map(_color_health, subset=["Health"])
+        .map(_color_uptime, subset=["Uptime %"])
         .format({
             "Health": "{:.2f}",
             "Uptime %": "{:.2f}",
