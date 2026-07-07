@@ -636,20 +636,22 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
         st.markdown("#### Facility vs Ops Overview")
 
         if not df_robot_errors.empty:
-            st.markdown("#### Operations vs Facility — % Share")
+            st.markdown("#### Operations vs Facility")
 
             pivot_ops_sum = _aggregate_pivot_sum(df_robot_errors, "ops_errors", aggregation)
             pivot_fac_sum = _aggregate_pivot_sum(df_robot_errors, "facility_errors", aggregation)
             pivot_total = _aggregate_pivot_sum(df_robot_errors, "total_errors", aggregation)
 
             pivot_ops_pct = (pivot_ops_sum / pivot_total * 100).fillna(0)
-            pivot_fac_pct = (pivot_fac_sum / pivot_total * 100).fillna(0)
 
             _chart_title_with_info("Errors caused by Operations %")
             st.plotly_chart(_make_trend_chart(pivot_ops_pct, "Errors caused by Operations %", "%", pct=True), use_container_width=True)
 
-            _chart_title_with_info("Errors caused by Facility %")
-            st.plotly_chart(_make_trend_chart(pivot_fac_pct, "Errors caused by Facility %", "%", pct=True), use_container_width=True)
+            _chart_title_with_info("Errors caused by Operations")
+            st.plotly_chart(_make_trend_chart(pivot_ops_sum, "Errors caused by Operations", "Count"), use_container_width=True)
+
+            _chart_title_with_info("Errors caused by Facility")
+            st.plotly_chart(_make_trend_chart(pivot_fac_sum, "Errors caused by Facility", "Count"), use_container_width=True)
 
             st.divider()
             st.markdown("#### Error Stopped System")
@@ -661,12 +663,3 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
             pivot_false = _aggregate_pivot_sum(df_robot_errors, "error_stopped_false", aggregation)
             _chart_title_with_info("Error Stopped System False")
             st.plotly_chart(_make_trend_chart(pivot_false, "Error Stopped System False", "Count"), use_container_width=True)
-
-            st.divider()
-            st.markdown("#### Errors caused by Operations vs Facility — Counts")
-
-            _chart_title_with_info("Errors caused by Operations")
-            st.plotly_chart(_make_trend_chart(pivot_ops_sum, "Errors caused by Operations", "Count"), use_container_width=True)
-
-            _chart_title_with_info("Errors caused by Facility")
-            st.plotly_chart(_make_trend_chart(pivot_fac_sum, "Errors caused by Facility", "Count"), use_container_width=True)
