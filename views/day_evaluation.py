@@ -42,14 +42,14 @@ def render():
         st.markdown("#### Day Evaluation")
 
         if sf_available:
-            data_source = st.radio("Picking data source", ["CSV Upload", "Snowflake"], index=0, key="day_ds")
+            data_source = st.radio("Picking data source", ["CSV Upload", "Snowflake (Not Working)"], index=0, key="day_ds")
         else:
-            data_source = "CSV Upload"
+            data_source = st.radio("Picking data source", ["CSV Upload", "Snowflake (Not Working)"], index=0, key="day_ds")
 
         picking_file = None
         sf_warehouse = sf_date_from = sf_date_to = None
 
-        if data_source == "Snowflake":
+        if data_source == "Snowflake (Not Working)":
             warehouses = get_available_warehouses()
             sf_warehouse = st.selectbox("Warehouse", warehouses, key="day_wh")
             col_f, col_t = st.columns(2)
@@ -72,7 +72,7 @@ def render():
     )
 
     df_raw = None
-    if data_source == "Snowflake":
+    if data_source == "Snowflake (Not Working)":
         if sf_warehouse and sf_date_from and sf_date_to:
             with st.spinner("Loading from Snowflake..."):
                 try:
