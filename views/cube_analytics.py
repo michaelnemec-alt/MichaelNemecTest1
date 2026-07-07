@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import date, timedelta
 
-from components.date_range_picker import date_range_picker
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_robot_state, query_bin_presentations,
@@ -119,21 +118,33 @@ def render():
         selected_view = st.selectbox("Dashboard view", VIEWS, index=0, key="cube_view")
         st.divider()
 
-        if "cube_date_from" not in st.session_state:
-            st.session_state.cube_date_from = str(date.today() - timedelta(days=30))
-            st.session_state.cube_date_to = str(date.today())
+        PRESETS = ["Yesterday", "7 days", "14 days", "30 days", "60 days", "90 days", "Custom"]
+        if "cube_preset" not in st.session_state:
+            st.session_state.cube_preset = "30 days"
 
-        date_result = date_range_picker(
-            date_from=st.session_state.cube_date_from,
-            date_to=st.session_state.cube_date_to,
-            key="cube_drp",
-        )
-        if date_result:
-            st.session_state.cube_date_from = date_result["from"]
-            st.session_state.cube_date_to = date_result["to"]
+        preset = st.segmented_control("Date range", PRESETS,
+                                       default=st.session_state.cube_preset,
+                                       key="cube_preset_ctrl")
+        if preset:
+            st.session_state.cube_preset = preset
 
-        dt_from = date.fromisoformat(st.session_state.cube_date_from)
-        dt_to = date.fromisoformat(st.session_state.cube_date_to)
+        active = st.session_state.cube_preset
+        if active == "Custom":
+            if "cube_custom_range" not in st.session_state:
+                st.session_state.cube_custom_range = (date.today() - timedelta(days=30), date.today())
+            date_val = st.date_input("Select dates", value=st.session_state.cube_custom_range,
+                                      max_value=date.today(), key="cube_custom_dt")
+            if isinstance(date_val, tuple) and len(date_val) == 2:
+                dt_from, dt_to = date_val
+                st.session_state.cube_custom_range = date_val
+            else:
+                dt_from, dt_to = (date_val[0] if isinstance(date_val, tuple) else date_val), None
+        else:
+            preset_map = {"Yesterday": (1, 1), "7 days": (7, 0), "14 days": (14, 0),
+                          "30 days": (30, 0), "60 days": (60, 0), "90 days": (90, 0)}
+            days_back, end_off = preset_map.get(active, (30, 0))
+            dt_from = date.today() - timedelta(days=days_back)
+            dt_to = date.today() - timedelta(days=end_off)
 
         st.divider()
         aggregation = st.radio("Aggregation", ["Day", "Week", "Month"], index=1, horizontal=True, key="cube_agg")
@@ -204,7 +215,20 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
             return "background-color: #ffeb9c"
         return "background-color: #ffc7ce"
 
-    styled = latest.style.applymap(_color_health, subset=["Health"]).applymap(_color_uptime, subset=["Uptime %"])
+    styled = (latest.style
+        .applymap(_color_health, subset=["Health"])
+        .applymap(_color_uptime, subset=["Uptime %"])
+        .format({
+            "Health": "{:.2f}",
+            "Uptime %": "{:.2f}",
+            "Wait (s)": "{:.1f}",
+            "Waste (s)": "{:.2f}",
+            "Battery": "{:.2f}",
+            "MTBF (h)": lambda x: str(int(x)) if pd.notna(x) else "None",
+            "Pkt Loss %": "{:.2f}",
+            "MBBD": lambda x: str(int(x)) if pd.notna(x) else "None",
+        })
+    )
     st.dataframe(styled, use_container_width=True, hide_index=True)
     st.caption(f"Data from: {latest_date.strftime('%Y-%m-%d')}")
 
