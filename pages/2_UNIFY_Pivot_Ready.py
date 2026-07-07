@@ -124,11 +124,24 @@ with st.sidebar:
             )
             api_installation = installations[selected_idx]
 
-            col_f, col_t = st.columns(2)
-            with col_f:
-                api_date_from = st.date_input("From", value=date.today() - timedelta(days=2))
-            with col_t:
-                api_date_to = st.date_input("To", value=date.today() - timedelta(days=1))
+            presets = {
+                "Yesterday": (date.today() - timedelta(days=1), date.today() - timedelta(days=1)),
+                "Last 7 days": (date.today() - timedelta(days=7), date.today()),
+                "Last 14 days": (date.today() - timedelta(days=14), date.today()),
+                "Last 30 days": (date.today() - timedelta(days=30), date.today()),
+                "Custom": None,
+            }
+            preset = st.radio("Date range", list(presets.keys()), index=1, horizontal=True)
+
+            if preset != "Custom":
+                api_date_from, api_date_to = presets[preset]
+                st.caption(f"{api_date_from} → {api_date_to}")
+            else:
+                col_f, col_t = st.columns(2)
+                with col_f:
+                    api_date_from = st.date_input("From", value=date.today() - timedelta(days=7))
+                with col_t:
+                    api_date_to = st.date_input("To", value=date.today())
     else:
         uploaded_files = st.file_uploader(
             "Upload CSV files",
