@@ -404,21 +404,27 @@ def _view_performance(date_from_str, date_to_str, aggregation):
     st.markdown("**Filtered by Pick Type / Category**")
 
     if not df_pwt.empty:
-        filter_col1, filter_col2 = st.columns(2)
-
         all_pick_types = sorted(df_pwt["pick_type"].dropna().unique().tolist())
         all_categories = sorted(c for c in df_pwt["category"].dropna().unique().tolist() if c != "")
 
-        with filter_col1:
-            selected_pick_types = st.multiselect("Pick type", all_pick_types, default=all_pick_types, key="perf_pick_type")
-        with filter_col2:
-            selected_categories = st.multiselect("Category", all_categories, default=all_categories, key="perf_category")
+        with st.sidebar:
+            st.divider()
+            st.markdown("#### Performance Filters")
+            selected_pick_types = st.multiselect(
+                "Pick Type", all_pick_types, default=[], key="perf_pick_type",
+                placeholder="All pick types",
+            )
+            selected_categories = st.multiselect(
+                "Category", all_categories, default=[], key="perf_category",
+                placeholder="All categories",
+            )
 
-        df_filtered = df_pwt.copy()
-        if selected_pick_types:
-            df_filtered = df_filtered[df_filtered["pick_type"].isin(selected_pick_types)]
-        if selected_categories:
-            df_filtered = df_filtered[df_filtered["category"].isin(selected_categories)]
+        use_pick = selected_pick_types if selected_pick_types else all_pick_types
+        use_cat = selected_categories if selected_categories else all_categories
+
+        df_filtered = df_pwt[
+            df_pwt["pick_type"].isin(use_pick) & df_pwt["category"].isin(use_cat)
+        ]
 
         if df_filtered.empty:
             st.info("No data for the selected filters.")
