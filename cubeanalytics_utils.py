@@ -1,4 +1,4 @@
-"""CubeAnalytics API helpers for the UNIFY Pivot Ready page."""
+"""CubeAnalytics API helpers."""
 
 import streamlit as st
 import pandas as pd
@@ -51,6 +51,47 @@ def _fetch_all_pages(url, params):
         url = data.get("next")
         params = None  # next URL already contains params
     return all_results
+
+
+@st.cache_data(ttl=300)
+def query_system_health(installation_id, date_from_str, date_to_str):
+    url = f"{BASE_URL}/installations/{installation_id}/system-health/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        h = day_result.get("result", {})
+        rows.append({
+            "date": day_result.get("date"),
+            "health_index": h.get("health_index"),
+            "health_bucket": h.get("health_bucket"),
+            "uptime": h.get("uptime"),
+            "wait_bin": h.get("wait_bin"),
+            "waste_time": h.get("waste_time"),
+            "average_battery_score": h.get("average_battery_score"),
+            "mtbf_h": h.get("mtbf_h"),
+            "packet_loss": h.get("packet_loss"),
+            "mbbd": h.get("mbbd"),
+            "uptime_score": h.get("uptime_score"),
+            "wait_time_score": h.get("wait_time_score"),
+            "waste_time_score": h.get("waste_time_score"),
+            "battery_score": h.get("battery_score"),
+            "mtbf_score": h.get("mtbf_score"),
+            "packet_loss_score": h.get("packet_loss_score"),
+            "mbbd_score": h.get("mbbd_score"),
+            "mtbf_error_count": h.get("mtbf_error_count"),
+            "mtbf_operational_hours": h.get("mtbf_operational_hours"),
+            "mbbd_bin_count": h.get("mbbd_bin_count"),
+            "mbbd_port_downtime_count": h.get("mbbd_port_downtime_count"),
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
 
 
 @st.cache_data(ttl=300)
