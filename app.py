@@ -38,20 +38,18 @@ section[data-testid="stSidebar"] button {
 st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>", unsafe_allow_html=True)
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
-if "nav_selection" not in st.session_state:
-    st.session_state.nav_selection = "Home"
+PAGES = ["Home", "Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "CUBE Analytics"]
 
 selected = st.segmented_control(
     "nav",
-    options=["Home", "Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "CUBE Analytics"],
-    default=st.session_state.nav_selection,
+    options=PAGES,
+    default="Home",
+    key="nav_selection",
     label_visibility="collapsed",
 )
 
-if selected is not None:
-    st.session_state.nav_selection = selected
-else:
-    selected = st.session_state.nav_selection
+if not selected:
+    selected = "Home"
 
 st.markdown("<br>", unsafe_allow_html=True)
 
