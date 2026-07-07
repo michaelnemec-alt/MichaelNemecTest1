@@ -234,7 +234,6 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     st.dataframe(styled, use_container_width=True, hide_index=True)
     st.caption(f"Data from: {latest_date.strftime('%Y-%m-%d')}")
 
-    st.divider()
     col_title, col_info = st.columns([8, 1])
     with col_title:
         st.markdown("#### Health Index Trend")
