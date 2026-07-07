@@ -13,7 +13,7 @@ logger = logging.getLogger("cube_analytics")
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_robot_state, query_bin_presentations,
-    query_port_wait_time_daily, query_port_uptime, query_incidents,
+    query_port_wait_time_daily, query_port_uptime, query_incidents, query_robot_errors,
 )
 
 SITE_COLORS = [
@@ -48,6 +48,8 @@ METRIC_INFO = {
     "Average Battery Score": "Average battery health score across all robots at each site. Scale: 1 (poor) to 5 (excellent). Low scores may indicate aging batteries needing replacement.",
     "Health Index": "Overall system health score combining uptime, wait times, waste, battery, and error metrics. Scale: 1 (critical) to 5 (excellent). Target: >= 4.0.",
     "Robot Uptime": "Percentage of total robot time spent in productive or ready states (100% minus recovery, unavailable, service off grid, and parked on grid). Higher is better.",
+    "Error Stopped System True": "Count of robot errors per day that caused the AutoStore system to stop. These are critical errors requiring immediate intervention. Lower is better.",
+    "Error Stopped System False": "Count of robot errors per day that were resolved without stopping the system. The system continued operating while the error was handled. High counts are normal.",
 }
 
 
@@ -541,9 +543,32 @@ def _view_battery_robots(date_from_str, date_to_str, aggregation):
         st.plotly_chart(_make_trend_chart(pivot, "Average Battery Score", "Score (1-5)"), use_container_width=True)
 
 
+def _aggregate_pivot_sum(df, value_col, agg_mode):
+    df = df.copy()
+    if agg_mode == "Week":
+        df["period"] = df["date"].dt.to_period("W").dt.start_time
+    elif agg_mode == "Month":
+        df["period"] = df["date"].dt.to_period("M").dt.start_time
+    else:
+        df["period"] = df["date"]
+    grouped = df.groupby(["site", "period"])[value_col].sum().reset_index()
+    pivot = grouped.pivot(index="period", columns="site", values=value_col).sort_index()
+    if agg_mode == "Week":
+        pivot.index = pivot.index.strftime("W%V %Y")
+    elif agg_mode == "Month":
+        pivot.index = pivot.index.strftime("%Y-%m")
+    else:
+        pivot.index = pivot.index.strftime("%Y-%m-%d")
+    return pivot
+
+
 def _view_health_index(date_from_str, date_to_str, aggregation):
     with st.spinner("Loading health index data..."):
-        df_health = _load_for_sites(query_system_health, date_from_str, date_to_str)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
+            f_robot_errors = pool.submit(_load_for_sites, query_robot_errors, date_from_str, date_to_str)
+        df_health = f_health.result()
+        df_robot_errors = f_robot_errors.result()
 
     if df_health.empty:
         st.warning("No data returned.")
@@ -554,6 +579,18 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
     pivot = _aggregate_pivot(df_health, "health_index", aggregation)
     _chart_title_with_info("Health Index")
     st.plotly_chart(_make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target >= 4.0"), use_container_width=True)
+
+    if not df_robot_errors.empty:
+        st.divider()
+        st.markdown("#### Error Stopped System")
+
+        pivot_true = _aggregate_pivot_sum(df_robot_errors, "error_stopped_true", aggregation)
+        _chart_title_with_info("Error Stopped System True")
+        st.plotly_chart(_make_trend_chart(pivot_true, "Error Stopped System True", "Count"), use_container_width=True)
+
+        pivot_false = _aggregate_pivot_sum(df_robot_errors, "error_stopped_false", aggregation)
+        _chart_title_with_info("Error Stopped System False")
+        st.plotly_chart(_make_trend_chart(pivot_false, "Error Stopped System False", "Count"), use_container_width=True)
 
     st.divider()
     metric_choice = st.selectbox(

@@ -267,6 +267,30 @@ def query_incidents(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=300)
+def query_robot_errors(installation_id, date_from_str, date_to_str):
+    url = f"{BASE_URL}/installations/{installation_id}/robot-errors/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        errors = day_result.get("result", {}).get("robot_errors", [])
+        stopped_true = sum(1 for e in errors if e.get("error_stopped_system") is True)
+        stopped_false = sum(1 for e in errors if e.get("error_stopped_system") is False)
+        rows.append({
+            "date": day_result.get("date"),
+            "error_stopped_true": stopped_true,
+            "error_stopped_false": stopped_false,
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=300)
 def query_port_wait_time_daily(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/port-bin-wait-time/"
     params = {"after": date_from_str, "before": date_to_str}
