@@ -333,11 +333,13 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
 
 def _view_performance(date_from_str, date_to_str, aggregation):
     with st.spinner("Loading performance data..."):
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ThreadPoolExecutor(max_workers=3) as pool:
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
+            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
         df_health = f_health.result()
         df_pwt = f_pwt.result()
+        df_robot = f_robot.result()
 
     if df_health.empty:
         st.warning("No data returned.")
@@ -413,14 +415,18 @@ def _view_performance(date_from_str, date_to_str, aggregation):
     else:
         st.info("No port wait time data available.")
 
+    if not df_robot.empty and "working_pct" in df_robot.columns:
+        pivot = _aggregate_pivot(df_robot, "working_pct", aggregation)
+        st.plotly_chart(_make_trend_chart(pivot, "Robot Working %", "% Working", pct=True), use_container_width=True)
+
+    if not df_robot.empty and "robot_availability_pct" in df_robot.columns:
+        pivot = _aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
+        st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
+
 
 def _view_battery_robots(date_from_str, date_to_str, aggregation):
     with st.spinner("Loading battery and robot data..."):
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
-            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
-        df_health = f_health.result()
-        df_robot = f_robot.result()
+        df_health = _load_for_sites(query_system_health, date_from_str, date_to_str)
 
     if df_health.empty:
         st.warning("No data returned.")
@@ -431,14 +437,6 @@ def _view_battery_robots(date_from_str, date_to_str, aggregation):
     if "average_battery_score" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "average_battery_score", aggregation)
         st.plotly_chart(_make_trend_chart(pivot, "Average Battery Score", "Score (1-5)"), use_container_width=True)
-
-    if not df_robot.empty and "working_pct" in df_robot.columns:
-        pivot = _aggregate_pivot(df_robot, "working_pct", aggregation)
-        st.plotly_chart(_make_trend_chart(pivot, "Robot Working %", "% Working", pct=True), use_container_width=True)
-
-    if not df_robot.empty and "robot_availability_pct" in df_robot.columns:
-        pivot = _aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
-        st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
 
 
 def _view_health_index(date_from_str, date_to_str, aggregation):
