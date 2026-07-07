@@ -34,21 +34,23 @@ section[data-testid="stSidebar"] button {
 
 .footer { text-align:center; color:#d1d5db; font-size:0.78em; padding:40px 0 10px 0; }
 
-/* CUBE Analytics dropdown popover button — Gray Gradient */
-[data-testid="stPopoverButton"] > button {
+/* Nav buttons — gray gradient style */
+div[data-testid="stColumns"] > div > div > div > div[data-testid="stPopoverButton"] > button,
+div[data-testid="stColumns"] > div button[kind="secondary"] {
     background: linear-gradient(90deg, #4a4a4a, #6b6b6b) !important;
     color: white !important;
     border: none !important;
     border-radius: 8px !important;
-    padding: 12px 24px !important;
-    font-size: 14px !important;
+    padding: 10px 16px !important;
+    font-size: 13px !important;
     font-weight: 600 !important;
-    min-height: 42px !important;
-    min-width: 220px !important;
+    min-height: 40px !important;
+    width: 100% !important;
     box-shadow: 0 4px 15px rgba(74, 74, 74, 0.3) !important;
     transition: all 0.3s ease !important;
 }
-[data-testid="stPopoverButton"] > button:hover {
+div[data-testid="stColumns"] > div > div > div > div[data-testid="stPopoverButton"] > button:hover,
+div[data-testid="stColumns"] > div button[kind="secondary"]:hover {
     background: linear-gradient(90deg, #5a5a5a, #7b7b7b) !important;
     box-shadow: 0 6px 20px rgba(74, 74, 74, 0.5) !important;
     transform: translateY(-2px) !important;
@@ -65,32 +67,39 @@ section[data-testid="stSidebar"] button {
 st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>", unsafe_allow_html=True)
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
-PAGES = ["Home", "Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "CUBE Analytics"]
 CUBE_VIEWS = ["Overview & Health", "Error & Health Metrics", "Performance", "Battery & Robots", "Health Index"]
 
-selected = st.segmented_control(
-    "nav",
-    options=PAGES,
-    default="Home",
-    key="nav_selection",
-    label_visibility="collapsed",
-)
+if "active_page" not in st.session_state:
+    st.session_state.active_page = "Home"
 
-if not selected:
-    selected = "Home"
+col1, col2, col3, col4, col5 = st.columns(5, gap="small")
 
-if selected == "CUBE Analytics":
-    with st.popover("☰ CUBE Analytics — Select View", use_container_width=False):
+with col1:
+    if st.button("Home", key="nav_home", use_container_width=True):
+        st.session_state.active_page = "Home"
+with col2:
+    if st.button("Prio vs Picking", key="nav_prio", use_container_width=True):
+        st.session_state.active_page = "Prio vs Picking"
+with col3:
+    if st.button("UNIFY Pivot Ready", key="nav_unify", use_container_width=True):
+        st.session_state.active_page = "UNIFY Pivot Ready"
+with col4:
+    if st.button("Day Evaluation", key="nav_day", use_container_width=True):
+        st.session_state.active_page = "Day Evaluation"
+with col5:
+    with st.popover("☰ CUBE Analytics", use_container_width=True):
         cube_view = st.radio(
-            "Dashboard view",
+            "Select view",
             CUBE_VIEWS,
             index=0,
             key="cube_nav_selection",
             label_visibility="collapsed",
         )
-    if not cube_view:
-        cube_view = "Overview & Health"
-    st.markdown(f"<p style='font-size:0.9em; color:#6b7280; margin:-8px 0 0 0;'>Viewing: <b style=\"color:#1F3864;\">{cube_view}</b></p>", unsafe_allow_html=True)
+        if st.button("Open", key="nav_cube_go", use_container_width=True):
+            st.session_state.active_page = "CUBE Analytics"
+
+selected = st.session_state.active_page
+cube_view = cube_view if selected == "CUBE Analytics" else None
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -150,6 +159,6 @@ elif selected == "Day Evaluation":
 
 elif selected == "CUBE Analytics":
     from views.cube_analytics import render
-    render(cube_view)
+    render(cube_view or "Overview & Health")
 
 st.markdown("<div class='footer'>Created by <b>Michael Nemec</b></div>", unsafe_allow_html=True)
