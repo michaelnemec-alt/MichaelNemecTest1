@@ -23,6 +23,40 @@ VIEWS = [
     "Health Index",
 ]
 
+METRIC_INFO = {
+    "System Uptime": "Percentage of time the AutoStore system was operational after accounting for planned recoveries. Formula: recovery_up_ratio x 100. Target: >= 99.7%.",
+    "System Availability": "Percentage of time the system was fully available for operations. Formula: up_ratio x 100. Unlike uptime, this does not account for recovery periods.",
+    "Robot Availability": "Percentage of total robot time spent in a ready state (available + charging available). A declining trend means more robots are in unavailable, recovery, or service states.",
+    "Robot Working %": "Percentage of total robot time spent actively executing tasks. Higher values indicate robots are being utilized more. Complements Robot Availability.",
+    "Port Uptime": "Percentage of time the picking/induction ports were operational and available. Calculated per port, then averaged across all ports at each site.",
+    "Incident Count": "Number of system incidents (errors, stoppages, or alarms) recorded per day. Lower is better. Spikes may indicate hardware failures or software issues.",
+    "Packet Loss": "Percentage of network packets lost in communication between controllers and robots. Target: < 5%. High packet loss causes robot delays and task failures.",
+    "MTBF (Mean Time Between Failures)": "Average number of hours the system runs between failures. Higher is better. Measured across all robots and controllers at each site.",
+    "MBBD (Mean Bins Between Downtime)": "Average number of bin presentations completed between system downtimes. Higher is better. Measures operational reliability per unit of work.",
+    "Wait Time (system-level)": "Average time (seconds) a robot waits at a port before the bin is picked. Target: < 2s. High wait times indicate congestion or slow picking.",
+    "Waste Time (system-level)": "Average unproductive time (seconds) per bin presentation. Target: < 0.5s. Includes unnecessary movements, retries, or system overhead.",
+    "Bin Wait Time (filtered)": "Average bin wait time filtered by selected pick types and categories. Same as system-level wait time but scoped to specific operations.",
+    "User Wait Time (filtered)": "Average time the user (picker) waits for a bin to arrive at the port, filtered by pick type and category.",
+    "Waste Time (filtered)": "Average waste time filtered by selected pick types and categories. Target: < 0.5s.",
+    "Bin Presentations (filtered)": "Total number of bin presentations (picks) filtered by pick type and category. Shows throughput volume over time.",
+    "Average Battery Score": "Average battery health score across all robots at each site. Scale: 1 (poor) to 5 (excellent). Low scores may indicate aging batteries needing replacement.",
+    "Health Index": "Overall system health score combining uptime, wait times, waste, battery, and error metrics. Scale: 1 (critical) to 5 (excellent). Target: >= 4.0.",
+}
+
+
+def _chart_title_with_info(title):
+    info = METRIC_INFO.get(title, "No description available.")
+    info_escaped = info.replace('"', '&quot;').replace("'", "&#39;")
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:-8px;">'
+        f'<span style="font-size:14px;font-weight:600;color:#1F3864;">{title}</span>'
+        f'<span style="display:inline-flex;align-items:center;justify-content:center;'
+        f'width:18px;height:18px;border-radius:50%;background:#e8edf3;color:#5B9BD5;'
+        f'font-size:11px;font-weight:700;cursor:help;position:relative;" title="{info_escaped}">'
+        f'i</span></div>',
+        unsafe_allow_html=True,
+    )
+
 
 def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=None, pct=False):
     fig = go.Figure()
@@ -269,6 +303,7 @@ Each component scores 1-3 (Good / Room for Improvement). The health index is a w
 The dashed green line at 4.0 = target threshold.""")
 
     pivot = _aggregate_pivot(df_health, "health_index", aggregation)
+    _chart_title_with_info("Health Index")
     st.plotly_chart(_make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target >= 4.0"), use_container_width=True)
 
     st.divider()
@@ -299,35 +334,43 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
     if not df_uptime.empty:
         df_uptime["system_uptime_pct"] = df_uptime["recovery_up_ratio"] * 100
         pivot = _aggregate_pivot(df_uptime, "system_uptime_pct", aggregation)
+        _chart_title_with_info("System Uptime")
         st.plotly_chart(_make_trend_chart(pivot, "System Uptime", "Uptime", threshold=99.7, threshold_label="Target 99.7%", pct=True), use_container_width=True)
 
     if not df_uptime.empty:
         df_uptime["system_availability_pct"] = df_uptime["up_ratio"] * 100
         pivot = _aggregate_pivot(df_uptime, "system_availability_pct", aggregation)
+        _chart_title_with_info("System Availability")
         st.plotly_chart(_make_trend_chart(pivot, "System Availability", "Availability", pct=True), use_container_width=True)
 
     if not df_robot.empty:
         pivot = _aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
+        _chart_title_with_info("Robot Availability")
         st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
 
     if not df_port_uptime.empty:
         pivot = _aggregate_pivot(df_port_uptime, "uptime_pct", aggregation)
+        _chart_title_with_info("Port Uptime")
         st.plotly_chart(_make_trend_chart(pivot, "Port Uptime", "Uptime %", pct=True), use_container_width=True)
 
     if not df_incidents.empty:
         pivot = _aggregate_pivot(df_incidents, "incident_count", aggregation)
+        _chart_title_with_info("Incident Count")
         st.plotly_chart(_make_trend_chart(pivot, "Incident Count", "Count"), use_container_width=True)
 
     if "packet_loss" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "packet_loss", aggregation)
+        _chart_title_with_info("Packet Loss")
         st.plotly_chart(_make_trend_chart(pivot, "Packet Loss", "Packet Loss %", threshold=5.0, threshold_label="Target < 5%", pct=True), use_container_width=True)
 
     if "mtbf_h" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "mtbf_h", aggregation)
+        _chart_title_with_info("MTBF (Mean Time Between Failures)")
         st.plotly_chart(_make_trend_chart(pivot, "MTBF (Mean Time Between Failures)", "Hours"), use_container_width=True)
 
     if "mbbd" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "mbbd", aggregation)
+        _chart_title_with_info("MBBD (Mean Bins Between Downtime)")
         st.plotly_chart(_make_trend_chart(pivot, "MBBD (Mean Bins Between Downtime)", "Bins"), use_container_width=True)
 
 
@@ -349,10 +392,12 @@ def _view_performance(date_from_str, date_to_str, aggregation):
 
     if "wait_bin" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "wait_bin", aggregation)
+        _chart_title_with_info("Wait Time (system-level)")
         st.plotly_chart(_make_trend_chart(pivot, "Wait Time (system-level)", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
 
     if "waste_time" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "waste_time", aggregation)
+        _chart_title_with_info("Waste Time (system-level)")
         st.plotly_chart(_make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.5, threshold_label="Target < 0.5s"), use_container_width=True)
 
     st.divider()
@@ -407,20 +452,24 @@ def _view_performance(date_from_str, date_to_str, aggregation):
             ]:
                 piv = agg.pivot(index="period", columns="site", values=metric).sort_index()
                 piv = _format_pivot_index(piv, aggregation)
+                _chart_title_with_info(label)
                 st.plotly_chart(_make_trend_chart(piv, label, ylabel, threshold=thresh, threshold_label=thresh_label), use_container_width=True)
 
             piv_count = agg.pivot(index="period", columns="site", values="total_count").sort_index()
             piv_count = _format_pivot_index(piv_count, aggregation)
+            _chart_title_with_info("Bin Presentations (filtered)")
             st.plotly_chart(_make_trend_chart(piv_count, "Bin Presentations (filtered)", "Count"), use_container_width=True)
     else:
         st.info("No port wait time data available.")
 
     if not df_robot.empty and "working_pct" in df_robot.columns:
         pivot = _aggregate_pivot(df_robot, "working_pct", aggregation)
+        _chart_title_with_info("Robot Working %")
         st.plotly_chart(_make_trend_chart(pivot, "Robot Working %", "% Working", pct=True), use_container_width=True)
 
     if not df_robot.empty and "robot_availability_pct" in df_robot.columns:
         pivot = _aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
+        _chart_title_with_info("Robot Availability")
         st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
 
 
@@ -436,6 +485,7 @@ def _view_battery_robots(date_from_str, date_to_str, aggregation):
 
     if "average_battery_score" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "average_battery_score", aggregation)
+        _chart_title_with_info("Average Battery Score")
         st.plotly_chart(_make_trend_chart(pivot, "Average Battery Score", "Score (1-5)"), use_container_width=True)
 
 
@@ -450,6 +500,7 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
     st.markdown("#### Health Index")
 
     pivot = _aggregate_pivot(df_health, "health_index", aggregation)
+    _chart_title_with_info("Health Index")
     st.plotly_chart(_make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target >= 4.0"), use_container_width=True)
 
     st.divider()
