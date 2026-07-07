@@ -27,8 +27,11 @@ VIEWS = [
 def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=None, pct=False):
     fig = go.Figure()
     sites = pivot_df.columns.tolist()
-    for i, site in enumerate(sites):
-        color = SITE_COLORS[i % len(SITE_COLORS)]
+    site_means = {s: pivot_df[s].mean() for s in sites}
+    sorted_sites = sorted(sites, key=lambda s: site_means.get(s, 0), reverse=True)
+    color_map = {site: SITE_COLORS[i % len(SITE_COLORS)] for i, site in enumerate(sites)}
+    for site in sorted_sites:
+        color = color_map[site]
         vals = pivot_df[site]
         short_name = site.split("-", 1)[-1] if "-" in site else site
         hover_fmt = "%{y:.2f}%" if pct else "%{y:.2f}"
