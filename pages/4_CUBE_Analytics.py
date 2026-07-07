@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
 from datetime import date, timedelta
 
 from cubeanalytics_utils import (
@@ -84,39 +84,63 @@ SITE_COLORS = [
 
 
 def make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=None, pct=False):
-    fig, ax = plt.subplots(figsize=(12, 4))
+    fig = go.Figure()
     sites = pivot_df.columns.tolist()
     for i, site in enumerate(sites):
         color = SITE_COLORS[i % len(SITE_COLORS)]
-        ax.plot(pivot_df.index, pivot_df[site], color=color, linewidth=1.2, label=site, marker="", markersize=3)
+        vals = pivot_df[site]
+        if pct:
+            hover_text = [f"{site}<br>{pivot_df.index[j]}<br>{v:.2f}%" if pd.notna(v) else "" for j, v in enumerate(vals)]
+        else:
+            hover_text = [f"{site}<br>{pivot_df.index[j]}<br>{v:.2f}" if pd.notna(v) else "" for j, v in enumerate(vals)]
+        fig.add_trace(go.Scatter(
+            x=pivot_df.index, y=vals,
+            mode="lines+markers",
+            name=site,
+            line=dict(color=color, width=2),
+            marker=dict(size=4),
+            hovertext=hover_text,
+            hoverinfo="text",
+        ))
 
     if threshold is not None:
-        ax.axhline(y=threshold, color="#7ab648", linestyle="--", linewidth=1.5, alpha=0.7, label=threshold_label or "Threshold")
+        fig.add_hline(
+            y=threshold, line_dash="dash", line_color="#7ab648", line_width=2,
+            annotation_text=threshold_label or "Threshold",
+            annotation_position="top left",
+            annotation_font_color="#7ab648",
+        )
 
-    ax.set_title(title, fontsize=13, fontweight="bold", loc="left")
-    ax.set_ylabel(ylabel, fontsize=10)
-    ax.tick_params(axis="x", rotation=45, labelsize=8)
-    ax.tick_params(axis="y", labelsize=9)
-    if pct:
-        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.1f}%"))
-    ax.grid(axis="y", alpha=0.3)
-    ax.legend(
-        bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=7,
-        frameon=True, framealpha=0.9, edgecolor="#ccc",
+    tick_fmt = ".1f%" if pct else ".2f"
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=14, color="#1F3864"), x=0),
+        yaxis_title=ylabel,
+        xaxis_tickangle=-45,
+        xaxis_tickfont=dict(size=9),
+        yaxis_tickfont=dict(size=10),
+        yaxis_tickformat=tick_fmt if pct else None,
+        legend=dict(
+            font=dict(size=9),
+            orientation="v",
+            yanchor="top", y=1, xanchor="left", x=1.02,
+        ),
+        height=380,
+        margin=dict(l=60, r=200, t=40, b=60),
+        hovermode="x unified",
+        plot_bgcolor="white",
     )
-    fig.tight_layout()
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(gridcolor="#eee", gridwidth=1)
     return fig
 
 
 def aggregate_pivot(df, value_col, agg_mode):
+    df = df.copy()
     if agg_mode == "Week":
-        df = df.copy()
         df["period"] = df["date"].dt.to_period("W").dt.start_time
     elif agg_mode == "Month":
-        df = df.copy()
         df["period"] = df["date"].dt.to_period("M").dt.start_time
     else:
-        df = df.copy()
         df["period"] = df["date"]
     grouped = df.groupby(["site", "period"])[value_col].mean().reset_index()
     pivot = grouped.pivot(index="period", columns="site", values=value_col).sort_index()
@@ -231,49 +255,31 @@ st.caption(f"Data from: {latest_date.strftime('%Y-%m-%d')}")
 st.divider()
 st.header("Error & Health Metrics")
 
-# System Uptime (recovery_up_ratio from uptime endpoint)
 if not df_uptime.empty:
     df_uptime["system_uptime_pct"] = df_uptime["recovery_up_ratio"] * 100
     pivot = aggregate_pivot(df_uptime, "system_uptime_pct", aggregation)
-    fig = make_trend_chart(pivot, "System Uptime", "Uptime", threshold=99.7, threshold_label="Target 99.7%", pct=True)
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "System Uptime", "Uptime", threshold=99.7, threshold_label="Target 99.7%", pct=True), use_container_width=True)
 
-# System Availability (up_ratio from uptime endpoint)
 if not df_uptime.empty:
     df_uptime["system_availability_pct"] = df_uptime["up_ratio"] * 100
     pivot = aggregate_pivot(df_uptime, "system_availability_pct", aggregation)
-    fig = make_trend_chart(pivot, "System Availability", "Availability", pct=True)
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "System Availability", "Availability", pct=True), use_container_width=True)
 
-# Robot Availability
 if not df_robot.empty:
     pivot = aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
-    fig = make_trend_chart(pivot, "Robot Availability", "% Available", pct=True)
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
 
-# Packet Loss
 if not df_health.empty and "packet_loss" in df_health.columns:
     pivot = aggregate_pivot(df_health, "packet_loss", aggregation)
-    fig = make_trend_chart(pivot, "Packet Loss", "Packet Loss %", threshold=5.0, threshold_label="Target < 5%", pct=True)
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "Packet Loss", "Packet Loss %", threshold=5.0, threshold_label="Target < 5%", pct=True), use_container_width=True)
 
-# MTBF
 if not df_health.empty and "mtbf_h" in df_health.columns:
     pivot = aggregate_pivot(df_health, "mtbf_h", aggregation)
-    fig = make_trend_chart(pivot, "MTBF (Mean Time Between Failures)", "Hours")
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "MTBF (Mean Time Between Failures)", "Hours"), use_container_width=True)
 
-# MBBD
 if not df_health.empty and "mbbd" in df_health.columns:
     pivot = aggregate_pivot(df_health, "mbbd", aggregation)
-    fig = make_trend_chart(pivot, "MBBD (Mean Bins Between Downtime)", "Bins")
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "MBBD (Mean Bins Between Downtime)", "Bins"), use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -282,20 +288,14 @@ if not df_health.empty and "mbbd" in df_health.columns:
 st.divider()
 st.header("Performance")
 
-# Overall Wait Time / Waste Time from system-health (no filter)
 if not df_health.empty and "wait_bin" in df_health.columns:
     pivot = aggregate_pivot(df_health, "wait_bin", aggregation)
-    fig = make_trend_chart(pivot, "Wait Time (system-level)", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s")
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "Wait Time (system-level)", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
 
 if not df_health.empty and "waste_time" in df_health.columns:
     pivot = aggregate_pivot(df_health, "waste_time", aggregation)
-    fig = make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.5, threshold_label="Target < 0.5s")
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.5, threshold_label="Target < 0.5s"), use_container_width=True)
 
-# ── Filtered performance charts ──────────────────────────────────────────────
 st.subheader("Filtered by Pick Type / Category")
 
 if not df_pwt.empty:
@@ -361,15 +361,11 @@ if not df_pwt.empty:
         ]:
             piv = agg.pivot(index="period", columns="site", values=metric).sort_index()
             piv = _format_index(piv, aggregation)
-            fig = make_trend_chart(piv, label, ylabel, threshold=thresh, threshold_label=thresh_label)
-            st.pyplot(fig)
-            plt.close(fig)
+            st.plotly_chart(make_trend_chart(piv, label, ylabel, threshold=thresh, threshold_label=thresh_label), use_container_width=True)
 
         piv_count = agg.pivot(index="period", columns="site", values="total_count").sort_index()
         piv_count = _format_index(piv_count, aggregation)
-        fig = make_trend_chart(piv_count, "Bin Presentations (filtered)", "Count")
-        st.pyplot(fig)
-        plt.close(fig)
+        st.plotly_chart(make_trend_chart(piv_count, "Bin Presentations (filtered)", "Count"), use_container_width=True)
 else:
     st.info("No port wait time data available.")
 
@@ -380,19 +376,13 @@ else:
 st.divider()
 st.header("Battery & Robots")
 
-# Battery Score
 if not df_health.empty and "average_battery_score" in df_health.columns:
     pivot = aggregate_pivot(df_health, "average_battery_score", aggregation)
-    fig = make_trend_chart(pivot, "Average Battery Score", "Score (1-5)")
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "Average Battery Score", "Score (1-5)"), use_container_width=True)
 
-# Robot Working %
 if not df_robot.empty and "working_pct" in df_robot.columns:
     pivot = aggregate_pivot(df_robot, "working_pct", aggregation)
-    fig = make_trend_chart(pivot, "Robot Working %", "% Working", pct=True)
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "Robot Working %", "% Working", pct=True), use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -403,9 +393,7 @@ st.header("Health Index")
 
 if not df_health.empty and "health_index" in df_health.columns:
     pivot = aggregate_pivot(df_health, "health_index", aggregation)
-    fig = make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target ≥ 4.0")
-    st.pyplot(fig)
-    plt.close(fig)
+    st.plotly_chart(make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target >= 4.0"), use_container_width=True)
 
 
 # ── Download ─────────────────────────────────────────────────────────────────
