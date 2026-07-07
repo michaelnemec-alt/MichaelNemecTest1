@@ -34,23 +34,29 @@ section[data-testid="stSidebar"] button {
 
 .footer { text-align:center; color:#d1d5db; font-size:0.78em; padding:40px 0 10px 0; }
 
-/* CUBE Analytics dropdown popover button */
+/* CUBE Analytics dropdown popover button — Modern Gradient */
 [data-testid="stPopoverButton"] > button {
-    background: linear-gradient(135deg, #1F3864 0%, #2c4f8a 100%) !important;
+    background: linear-gradient(90deg, #ff7e5f, #feb47b) !important;
     color: white !important;
     border: none !important;
     border-radius: 8px !important;
-    padding: 8px 20px !important;
-    font-size: 13px !important;
-    font-weight: 500 !important;
-    min-height: 38px !important;
-    box-shadow: 0 2px 8px rgba(31, 56, 100, 0.3) !important;
+    padding: 12px 24px !important;
+    font-size: 14px !important;
+    font-weight: 600 !important;
+    min-height: 42px !important;
+    min-width: 220px !important;
+    box-shadow: 0 4px 15px rgba(255, 126, 95, 0.3) !important;
     transition: all 0.3s ease !important;
 }
 [data-testid="stPopoverButton"] > button:hover {
-    background: linear-gradient(135deg, #2c4f8a 0%, #3a6bb5 100%) !important;
-    box-shadow: 0 4px 12px rgba(31, 56, 100, 0.4) !important;
-    transform: translateY(-1px) !important;
+    box-shadow: 0 6px 20px rgba(255, 126, 95, 0.5) !important;
+    transform: translateY(-2px) !important;
+}
+/* Popover panel styling */
+[data-testid="stPopover"] [data-testid="stPopoverBody"] {
+    border-top: 3px solid #ff7e5f !important;
+    border-radius: 8px !important;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15) !important;
 }
 </style>
 """, unsafe_allow_html=True)
