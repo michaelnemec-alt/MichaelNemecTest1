@@ -268,30 +268,56 @@ def query_incidents(installation_id, date_from_str, date_to_str):
 
 @st.cache_data(ttl=300)
 def query_robot_errors(installation_id, date_from_str, date_to_str):
-    url = f"{BASE_URL}/installations/{installation_id}/robot-errors/"
+    url_re = f"{BASE_URL}/installations/{installation_id}/robot-errors/"
+    url_inc = f"{BASE_URL}/installations/{installation_id}/incidents/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    re_results = _fetch_all_pages(url_re, params)
+    inc_results = _fetch_all_pages(url_inc, params)
 
-    rows = []
-    for day_result in results:
-        errors = day_result.get("result", {}).get("robot_errors", [])
-        stopped_true = sum(1 for e in errors if e.get("error_stopped_system") is True)
-        stopped_false = sum(1 for e in errors if e.get("error_stopped_system") is False)
-        total = len(errors)
-        ops_errors = sum(1 for e in errors if e.get("is_bin_quality") is True and e.get("is_port") is False)
-        facility_errors = sum(1 for e in errors if e.get("is_bin_quality") is False)
-        rows.append({
-            "date": day_result.get("date"),
-            "error_stopped_true": stopped_true,
-            "error_stopped_false": stopped_false,
-            "total_errors": total,
-            "ops_errors": ops_errors,
-            "facility_errors": facility_errors,
-        })
+    all_errors = []
+    for day_result in re_results:
+        d = day_result.get("date")
+        for e in day_result.get("result", {}).get("robot_errors", []):
+            all_errors.append({
+                "date": d,
+                "ts": e.get("local_installation_timestamp", ""),
+                "error_x": e.get("error_x"),
+                "error_y": e.get("error_y"),
+                "error_stopped_system": e.get("error_stopped_system"),
+                "is_bin_quality": e.get("is_bin_quality"),
+                "is_port": e.get("is_port"),
+            })
 
-    if not rows:
+    inc_keys = set()
+    for day_result in inc_results:
+        for inc in day_result.get("result", {}).get("incidents", []):
+            ts = inc.get("start_local_timestamp", "")
+            ts_sec = ts[:19] if len(ts) >= 19 else ts
+            inc_keys.add((ts_sec, inc.get("x"), inc.get("y")))
+
+    rows_by_date = {}
+    for e in all_errors:
+        ts_sec = e["ts"][:19] if len(e["ts"]) >= 19 else e["ts"]
+        if (ts_sec, e["error_x"], e["error_y"]) not in inc_keys:
+            continue
+        d = e["date"]
+        if d not in rows_by_date:
+            rows_by_date[d] = {"date": d, "error_stopped_true": 0, "error_stopped_false": 0,
+                               "total_errors": 0, "ops_errors": 0, "facility_errors": 0}
+        r = rows_by_date[d]
+        r["total_errors"] += 1
+        if e["error_stopped_system"] is True:
+            r["error_stopped_true"] += 1
+        else:
+            r["error_stopped_false"] += 1
+        if e["is_bin_quality"] is True and e["is_port"] is False:
+            r["ops_errors"] += 1
+        if e["is_bin_quality"] is False:
+            r["facility_errors"] += 1
+
+    if not rows_by_date:
         return pd.DataFrame()
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(list(rows_by_date.values()))
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
 
