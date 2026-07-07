@@ -4,6 +4,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import io
+from datetime import date, timedelta
+
+from snowflake_utils import is_snowflake_configured, get_available_warehouses, query_picking_data
 
 st.set_page_config(
     page_title="Prio vs Picking Chart",
@@ -19,13 +22,36 @@ st.markdown(
 )
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────
+sf_available = is_snowflake_configured()
+
 with st.sidebar:
     st.header("⚙️ Settings")
-    uploaded_file = st.file_uploader(
-        "Upload picking export CSV",
-        type=["csv"],
-        help="Semicolon-delimited (;) CSV with order-level / pick-task-level export",
-    )
+
+    if sf_available:
+        data_source = st.radio("Data source", ["Snowflake", "CSV Upload"], index=0)
+    else:
+        data_source = "CSV Upload"
+
+    uploaded_file = None
+    sf_warehouse = None
+    sf_date_from = None
+    sf_date_to = None
+
+    if data_source == "Snowflake":
+        warehouses = get_available_warehouses()
+        sf_warehouse = st.selectbox("Warehouse", warehouses)
+        col_f, col_t = st.columns(2)
+        with col_f:
+            sf_date_from = st.date_input("From", value=date.today() - timedelta(days=2))
+        with col_t:
+            sf_date_to = st.date_input("To", value=date.today() - timedelta(days=1))
+    else:
+        uploaded_file = st.file_uploader(
+            "Upload picking export CSV",
+            type=["csv"],
+            help="Semicolon-delimited (;) CSV with order-level / pick-task-level export",
+        )
+
     plan_file = st.file_uploader(
         "Upload plan file (optional)",
         type=["csv"],
@@ -34,18 +60,6 @@ with st.sidebar:
     st.divider()
     show_comparison = st.checkbox("Show AS91 vs AS92 comparison", value=True)
     show_hourly = st.checkbox("Show hourly distribution", value=True)
-    st.divider()
-    st.markdown(
-        "**Required columns (picking):**\n"
-        "- `AutoStore`\n"
-        "- `Type`\n"
-        "- `Prioritization Time`\n"
-        "- `Finished Picking At`\n\n"
-        "**Plan file columns:**\n"
-        "- `Date`\n"
-        "- `order-planned-{H}`\n\n"
-        "💡 *Upload 2+ days of picking data to see pre-picked vs same-day breakdown.*"
-    )
 
 
 # ── Chart function ──────────────────────────────────────────────────────────
@@ -200,16 +214,37 @@ def fig_to_bytes(fig):
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
-if uploaded_file is None:
-    st.info("👈 Upload a CSV file in the left panel to get started.")
-    st.stop()
+df_raw = None
 
-# Load data
-try:
-    df_raw = pd.read_csv(uploaded_file, sep=";")
-except Exception as e:
-    st.error(f"Error reading CSV: {e}\n\nMake sure the file is semicolon-delimited (;)")
-    st.stop()
+if data_source == "Snowflake":
+    if sf_warehouse and sf_date_from and sf_date_to:
+        with st.spinner("Loading from Snowflake..."):
+            try:
+                df_raw = query_picking_data(
+                    sf_warehouse, str(sf_date_from), str(sf_date_to),
+                )
+            except Exception as e:
+                st.error(f"Snowflake query failed: {e}")
+                st.stop()
+        if df_raw.empty:
+            st.warning("No data found for the selected warehouse and dates.")
+            st.stop()
+        st.success(
+            f"Loaded **{len(df_raw):,}** pick tasks from Snowflake "
+            f"({sf_warehouse}, {sf_date_from} to {sf_date_to})"
+        )
+    else:
+        st.info("Select warehouse and date range in the sidebar.")
+        st.stop()
+else:
+    if uploaded_file is None:
+        st.info("👈 Upload a CSV file in the left panel to get started.")
+        st.stop()
+    try:
+        df_raw = pd.read_csv(uploaded_file, sep=";")
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}\n\nMake sure the file is semicolon-delimited (;)")
+        st.stop()
 
 # Validate columns
 required = ["AutoStore", "Type", "Prioritization Time", "Finished Picking At"]
