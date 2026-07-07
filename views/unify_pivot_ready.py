@@ -120,34 +120,38 @@ def render():
                                             format_func=lambda i: install_labels[i], key="unify_inst")
                 api_installation = installations[selected_idx]
 
-                if "api_date_range" not in st.session_state:
-                    st.session_state.api_date_range = (date.today() - timedelta(days=7), date.today())
+                PRESETS = ["Yesterday", "7 days", "14 days", "30 days", "60 days", "90 days", "Custom"]
+                if "unify_preset" not in st.session_state:
+                    st.session_state.unify_preset = "7 days"
 
-                st.caption(f"Today: **{date.today().strftime('%b %d, %Y')}**")
-                date_val = st.date_input("Select date range", value=st.session_state.api_date_range,
+                preset = st.segmented_control("Date range", PRESETS,
+                                               default=st.session_state.unify_preset,
+                                               key="unify_preset_ctrl")
+                if preset:
+                    st.session_state.unify_preset = preset
+
+                active = st.session_state.unify_preset
+                if active != "Custom":
+                    preset_map = {"Yesterday": (1, 1), "7 days": (7, 0), "14 days": (14, 0),
+                                  "30 days": (30, 0), "60 days": (60, 0), "90 days": (90, 0)}
+                    days_back, end_off = preset_map.get(active, (7, 0))
+                    st.session_state.unify_date_range = (
+                        date.today() - timedelta(days=days_back),
+                        date.today() - timedelta(days=end_off),
+                    )
+
+                if "unify_date_range" not in st.session_state:
+                    st.session_state.unify_date_range = (date.today() - timedelta(days=7), date.today())
+
+                date_val = st.date_input("Select dates", value=st.session_state.unify_date_range,
                                           max_value=date.today(), key="unify_dates")
                 if isinstance(date_val, tuple) and len(date_val) == 2:
                     api_date_from, api_date_to = date_val
-                    st.session_state.api_date_range = date_val
+                    st.session_state.unify_date_range = date_val
                 elif isinstance(date_val, tuple) and len(date_val) == 1:
                     api_date_from = date_val[0]
                 else:
                     api_date_from = date_val
-
-                preset_defs = [
-                    ("Yesterday", 1, 1), ("7 days", 7, 0), ("14 days", 14, 0),
-                    ("30 days", 30, 0), ("60 days", 60, 0), ("90 days", 90, 0),
-                ]
-                for row_presets in [preset_defs[:3], preset_defs[3:]]:
-                    cols = st.columns(3)
-                    for col, (label, days_back, end_offset) in zip(cols, row_presets):
-                        with col:
-                            if st.button(label, key=f"unify_preset_{days_back}", use_container_width=True):
-                                st.session_state.api_date_range = (
-                                    date.today() - timedelta(days=days_back),
-                                    date.today() - timedelta(days=end_offset),
-                                )
-                                st.rerun()
         else:
             uploaded_files = st.file_uploader("Upload CSV files", type=["csv"],
                                               accept_multiple_files=True,
