@@ -7,7 +7,8 @@ st.markdown("""
 [data-testid="stSidebarNav"] { display: none; }
 
 header[data-testid="stHeader"] { background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-.block-container { padding-top: 0.5rem; max-width: 1200px; }
+.block-container { padding-top: 0.5rem; max-width: 1380px; }
+[data-testid="stPlotlyChart"] { margin-bottom: -20px; }
 
 section[data-testid="stSidebar"] { background-color: #fafafa; border-right: 1px solid #f0f0f0; }
 section[data-testid="stSidebar"] button {

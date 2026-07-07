@@ -62,6 +62,12 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
         hovermode="x unified",
         hoverlabel=dict(font_size=11),
         plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    fig.add_shape(
+        type="rect", xref="paper", yref="paper",
+        x0=0, y0=0, x1=1, y1=1,
+        line=dict(color="#e0e0e0", width=1),
     )
     fig.update_xaxes(showgrid=False)
     fig.update_yaxes(gridcolor="#eee", gridwidth=1)
