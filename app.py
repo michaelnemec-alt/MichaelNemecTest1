@@ -1,4 +1,10 @@
 import streamlit as st
+import logging
+import time
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("app")
+logger.info("=== app.py starting, timestamp=%s ===", time.time())
 
 st.set_page_config(page_title="AutoStore Analytics", page_icon="📊", layout="wide")
 
@@ -122,6 +128,7 @@ elif selected == "Day Evaluation":
 
 elif selected == "CUBE Analytics":
     from views.cube_analytics import render
+    logger.info("Rendering CUBE Analytics view: %s", cube_view or "Overview & Health")
     render(cube_view or "Overview & Health")
 
 st.markdown("<div class='footer'>Created by <b>Michael Nemec</b></div>", unsafe_allow_html=True)

@@ -3,6 +3,12 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import logging
+import time
+import traceback
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("cube_analytics")
 
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
@@ -145,15 +151,24 @@ def _format_pivot_index(pivot, mode):
 
 
 def _load_for_sites(query_fn, date_from_str, date_to_str):
+    fn_name = getattr(query_fn, "__name__", str(query_fn))
+    logger.info("_load_for_sites START: %s (%s to %s)", fn_name, date_from_str, date_to_str)
+    t0 = time.time()
     installations = get_installations()
     frames = []
 
     def _fetch(inst):
-        df = query_fn(inst["id"], date_from_str, date_to_str)
-        if not df.empty:
-            df["site"] = inst["name"]
-            return df
-        return None
+        try:
+            t1 = time.time()
+            df = query_fn(inst["id"], date_from_str, date_to_str)
+            logger.info("  %s / %s fetched %d rows in %.1fs", fn_name, inst["name"], len(df), time.time() - t1)
+            if not df.empty:
+                df["site"] = inst["name"]
+                return df
+            return None
+        except Exception as e:
+            logger.error("  %s / %s FAILED: %s", fn_name, inst["name"], e)
+            return None
 
     with ThreadPoolExecutor(max_workers=len(installations)) as pool:
         futures = {pool.submit(_fetch, inst): inst for inst in installations}
@@ -161,10 +176,13 @@ def _load_for_sites(query_fn, date_from_str, date_to_str):
             result = f.result()
             if result is not None:
                 frames.append(result)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    result_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    logger.info("_load_for_sites END: %s -> %d rows in %.1fs", fn_name, len(result_df), time.time() - t0)
+    return result_df
 
 
 def render(selected_view="Overview & Health"):
+    logger.info("=== render() called with view='%s' ===", selected_view)
     if not is_api_configured():
         st.warning("CubeAnalytics API token not configured. Add `[cubeanalytics] token` to Streamlit secrets.")
         return
@@ -217,16 +235,22 @@ def render(selected_view="Overview & Health"):
     date_from_str = str(dt_from)
     date_to_str = str(dt_to)
 
-    if selected_view == "Overview & Health":
-        _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to)
-    elif selected_view == "Error & Health Metrics":
-        _view_error_health(date_from_str, date_to_str, aggregation)
-    elif selected_view == "Performance":
-        _view_performance(date_from_str, date_to_str, aggregation)
-    elif selected_view == "Battery & Robots":
-        _view_battery_robots(date_from_str, date_to_str, aggregation)
-    elif selected_view == "Health Index":
-        _view_health_index(date_from_str, date_to_str, aggregation)
+    try:
+        if selected_view == "Overview & Health":
+            _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to)
+        elif selected_view == "Error & Health Metrics":
+            _view_error_health(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Performance":
+            _view_performance(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Battery & Robots":
+            _view_battery_robots(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Health Index":
+            _view_health_index(date_from_str, date_to_str, aggregation)
+        logger.info("=== render() completed successfully for '%s' ===", selected_view)
+    except Exception as e:
+        logger.error("=== render() CRASHED for '%s': %s ===", selected_view, e)
+        logger.error(traceback.format_exc())
+        st.error(f"Error loading view: {e}")
 
 
 def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
