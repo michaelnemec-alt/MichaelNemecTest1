@@ -208,6 +208,65 @@ def query_bin_presentations(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=300)
+def query_port_uptime(installation_id, date_from_str, date_to_str):
+    url = f"{BASE_URL}/installations/{installation_id}/port-uptime/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        pm = day_result.get("result", {}).get("port_metrics", {})
+        if not pm:
+            continue
+        ports = pm.values() if isinstance(pm, dict) else pm
+        total_open = sum(p.get("open_seconds", 0) for p in ports)
+        total_closed = sum(p.get("closed_seconds", 0) for p in ports)
+        total_down = sum(p.get("downtime_seconds", 0) for p in ports)
+        total_stopped = sum(p.get("stopped_seconds", 0) for p in ports)
+        total_disabled = sum(p.get("disabled_seconds", 0) for p in ports)
+        total_all = total_open + total_closed + total_down + total_stopped + total_disabled
+        utils = [p.get("utilization", 0) for p in ports if p.get("utilization") is not None]
+        uptimes = [p.get("uptime_percentage", 0) for p in ports if p.get("uptime_percentage") is not None]
+
+        rows.append({
+            "date": day_result.get("date"),
+            "uptime_pct": (sum(uptimes) / len(uptimes) * 100) if uptimes else 0,
+            "utilization_pct": (sum(utils) / len(utils) * 100) if utils else 0,
+            "open_seconds": total_open,
+            "closed_seconds": total_closed,
+            "downtime_seconds": total_down,
+            "num_ports": len(list(ports)) if isinstance(pm, dict) else len(pm),
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=300)
+def query_incidents(installation_id, date_from_str, date_to_str):
+    url = f"{BASE_URL}/installations/{installation_id}/incidents/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        incidents = day_result.get("result", {}).get("incidents", [])
+        rows.append({
+            "date": day_result.get("date"),
+            "incident_count": len(incidents),
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=300)
 def query_port_wait_time_daily(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/port-bin-wait-time/"
     params = {"after": date_from_str, "before": date_to_str}

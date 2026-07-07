@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_robot_state, query_bin_presentations,
-    query_port_wait_time_daily,
+    query_port_wait_time_daily, query_port_uptime, query_incidents,
 )
 
 st.set_page_config(page_title="CUBE Analytics", page_icon="📊", layout="wide")
@@ -158,6 +158,7 @@ def aggregate_pivot(df, value_col, agg_mode):
 def load_all_data(date_from_str, date_to_str):
     installations = get_installations()
     health_frames, uptime_frames, robot_frames, bp_frames, pwt_frames = [], [], [], [], []
+    port_up_frames, incident_frames = [], []
 
     for inst in installations:
         iid, name = inst["id"], inst["name"]
@@ -187,12 +188,24 @@ def load_all_data(date_from_str, date_to_str):
             df_pwt["site"] = name
             pwt_frames.append(df_pwt)
 
+        df_pu = query_port_uptime(iid, date_from_str, date_to_str)
+        if not df_pu.empty:
+            df_pu["site"] = name
+            port_up_frames.append(df_pu)
+
+        df_inc = query_incidents(iid, date_from_str, date_to_str)
+        if not df_inc.empty:
+            df_inc["site"] = name
+            incident_frames.append(df_inc)
+
     return {
         "health": pd.concat(health_frames, ignore_index=True) if health_frames else pd.DataFrame(),
         "uptime": pd.concat(uptime_frames, ignore_index=True) if uptime_frames else pd.DataFrame(),
         "robot": pd.concat(robot_frames, ignore_index=True) if robot_frames else pd.DataFrame(),
         "bp": pd.concat(bp_frames, ignore_index=True) if bp_frames else pd.DataFrame(),
         "pwt": pd.concat(pwt_frames, ignore_index=True) if pwt_frames else pd.DataFrame(),
+        "port_uptime": pd.concat(port_up_frames, ignore_index=True) if port_up_frames else pd.DataFrame(),
+        "incidents": pd.concat(incident_frames, ignore_index=True) if incident_frames else pd.DataFrame(),
     }
 
 
@@ -204,6 +217,8 @@ df_uptime = data["uptime"]
 df_robot = data["robot"]
 df_bp = data["bp"]
 df_pwt = data["pwt"]
+df_port_uptime = data["port_uptime"]
+df_incidents = data["incidents"]
 
 if df_health.empty:
     st.warning("No data returned for the selected date range.")
@@ -268,6 +283,16 @@ if not df_uptime.empty:
 if not df_robot.empty:
     pivot = aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
     st.plotly_chart(make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
+
+# Port Uptime
+if not df_port_uptime.empty:
+    pivot = aggregate_pivot(df_port_uptime, "uptime_pct", aggregation)
+    st.plotly_chart(make_trend_chart(pivot, "Port Uptime", "Uptime %", pct=True), use_container_width=True)
+
+# Incident Count
+if not df_incidents.empty:
+    pivot = aggregate_pivot(df_incidents, "incident_count", aggregation)
+    st.plotly_chart(make_trend_chart(pivot, "Incident Count", "Count"), use_container_width=True)
 
 if not df_health.empty and "packet_loss" in df_health.columns:
     pivot = aggregate_pivot(df_health, "packet_loss", aggregation)
