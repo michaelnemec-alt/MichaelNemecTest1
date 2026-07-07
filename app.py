@@ -5,7 +5,6 @@ st.set_page_config(page_title="AutoStore Analytics", page_icon="📊", layout="w
 st.markdown("""
 <style>
 [data-testid="stSidebarNav"] { display: none; }
-div[data-testid="stSidebarUserContent"] > div:first-child { display: none; }
 
 header[data-testid="stHeader"] { background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 .block-container { padding-top: 0.5rem; max-width: 1200px; }

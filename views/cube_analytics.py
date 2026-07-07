@@ -29,16 +29,14 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
     for i, site in enumerate(sites):
         color = SITE_COLORS[i % len(SITE_COLORS)]
         vals = pivot_df[site]
-        if pct:
-            hover_text = [f"{site}<br>{pivot_df.index[j]}<br>{v:.2f}%" if pd.notna(v) else "" for j, v in enumerate(vals)]
-        else:
-            hover_text = [f"{site}<br>{pivot_df.index[j]}<br>{v:.2f}" if pd.notna(v) else "" for j, v in enumerate(vals)]
+        short_name = site.split("-", 1)[-1] if "-" in site else site
+        hover_fmt = "%{y:.2f}%" if pct else "%{y:.2f}"
         fig.add_trace(go.Scatter(
             x=pivot_df.index, y=vals,
-            mode="lines+markers", name=site,
+            mode="lines+markers", name=short_name,
             line=dict(color=color, width=2),
             marker=dict(size=4),
-            hovertext=hover_text, hoverinfo="text",
+            hovertemplate=hover_fmt + "<extra></extra>",
         ))
     if threshold is not None:
         fig.add_hline(
@@ -58,6 +56,7 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
         height=380,
         margin=dict(l=60, r=200, t=40, b=60),
         hovermode="x unified",
+        hoverlabel=dict(font_size=11),
         plot_bgcolor="white",
     )
     fig.update_xaxes(showgrid=False)
@@ -187,6 +186,15 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     latest.columns = ["Site", "Health", "Uptime %", "Wait (s)", "Waste (s)", "Battery", "MTBF (h)", "Pkt Loss %", "MBBD"]
     latest = latest.sort_values("Health", ascending=False).reset_index(drop=True)
 
+    latest["Health"] = latest["Health"].round(2)
+    latest["Uptime %"] = latest["Uptime %"].round(2)
+    latest["Wait (s)"] = latest["Wait (s)"].round(1)
+    latest["Waste (s)"] = latest["Waste (s)"].round(2)
+    latest["Battery"] = latest["Battery"].round(2)
+    latest["MTBF (h)"] = latest["MTBF (h)"].apply(lambda x: int(x) if pd.notna(x) else None)
+    latest["Pkt Loss %"] = latest["Pkt Loss %"].round(2)
+    latest["MBBD"] = latest["MBBD"].apply(lambda x: int(x) if pd.notna(x) else None)
+
     def _color_health(val):
         if pd.isna(val):
             return ""
@@ -210,7 +218,25 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     st.caption(f"Data from: {latest_date.strftime('%Y-%m-%d')}")
 
     st.divider()
-    st.markdown("#### Health Index Trend")
+    col_title, col_info = st.columns([8, 1])
+    with col_title:
+        st.markdown("#### Health Index Trend")
+    with col_info:
+        with st.popover("..."):
+            st.markdown("""**Health Index (1-5 scale)**
+
+Composite score of 7 component scores:
+- **5.0** = Excellent — all metrics optimal
+- **4.0-4.9** = Good — target range
+- **3.0-3.9** = Room for improvement
+- **< 3.0** = Needs attention
+
+**Components:** Uptime, Wait Time, Waste Time, Battery, MTBF, Packet Loss, MBBD
+
+Each component scores 1-3 (Good / Room for Improvement). The health index is a weighted composite rounded to 2 decimals.
+
+The dashed green line at 4.0 = target threshold.""")
+
     pivot = _aggregate_pivot(df_health, "health_index", aggregation)
     st.plotly_chart(_make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target >= 4.0"), use_container_width=True)
 
