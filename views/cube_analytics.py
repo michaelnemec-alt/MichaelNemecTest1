@@ -107,17 +107,10 @@ def _load_for_sites(query_fn, date_from_str, date_to_str):
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def render():
+def render(selected_view="Overview & Health"):
     if not is_api_configured():
         st.warning("CubeAnalytics API token not configured. Add `[cubeanalytics] token` to Streamlit secrets.")
         return
-
-    col_menu, col_label = st.columns([1, 12])
-    with col_menu:
-        with st.popover("☰"):
-            selected_view = st.radio("Dashboard view", VIEWS, index=0, key="cube_view", label_visibility="collapsed")
-    with col_label:
-        st.markdown(f"**{selected_view}**")
 
     with st.sidebar:
         st.markdown("#### CUBE Analytics")

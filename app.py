@@ -39,6 +39,7 @@ st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
 PAGES = ["Home", "Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "CUBE Analytics"]
+CUBE_VIEWS = ["Overview & Health", "Error & Health Metrics", "Performance", "Battery & Robots", "Health Index"]
 
 selected = st.segmented_control(
     "nav",
@@ -50,6 +51,17 @@ selected = st.segmented_control(
 
 if not selected:
     selected = "Home"
+
+if selected == "CUBE Analytics":
+    cube_view = st.segmented_control(
+        "cube_nav",
+        options=CUBE_VIEWS,
+        default="Overview & Health",
+        key="cube_nav_selection",
+        label_visibility="collapsed",
+    )
+    if not cube_view:
+        cube_view = "Overview & Health"
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -109,6 +121,6 @@ elif selected == "Day Evaluation":
 
 elif selected == "CUBE Analytics":
     from views.cube_analytics import render
-    render()
+    render(cube_view)
 
 st.markdown("<div class='footer'>Created by <b>Michael Nemec</b></div>", unsafe_allow_html=True)
