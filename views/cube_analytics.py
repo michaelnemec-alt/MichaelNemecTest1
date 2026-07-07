@@ -36,7 +36,7 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
             mode="lines+markers", name=short_name,
             line=dict(color=color, width=2),
             marker=dict(size=4),
-            hovertemplate=hover_fmt + "<extra></extra>",
+            hovertemplate=short_name + ": " + hover_fmt + "<extra></extra>",
         ))
     if threshold is not None:
         fig.add_hline(
