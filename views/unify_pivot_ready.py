@@ -99,7 +99,7 @@ def render():
         st.markdown("#### UNIFY Pivot Ready")
 
         if api_available:
-            data_source = st.radio("Data source", ["CSV Upload", "CubeAnalytics API"], index=0, key="unify_ds")
+            data_source = st.radio("Data source", ["CSV Upload", "CubeAnalytics API"], index=1, key="unify_ds")
         else:
             data_source = "CSV Upload"
 
