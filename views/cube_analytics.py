@@ -47,7 +47,7 @@ METRIC_INFO = {
     "Bin Presentations (filtered)": "Total number of bin presentations (picks) filtered by pick type and category. Shows throughput volume over time.",
     "Average Battery Score": "Average battery health score across all robots at each site. Scale: 1 (poor) to 5 (excellent). Low scores may indicate aging batteries needing replacement.",
     "Health Index": "Overall system health score combining uptime, wait times, waste, battery, and error metrics. Scale: 1 (critical) to 5 (excellent). Target: >= 4.0.",
-    "Robot Downtime Breakdown": "Percentage of total robot time spent in non-productive states: Recovery (error recovery), Unavailable (offline/manual control), Service Off Grid (maintenance off grid), Parked On Grid (maintenance on grid). Lower is better.",
+    "Robot Uptime": "Percentage of total robot time spent in productive or ready states (100% minus recovery, unavailable, service off grid, and parked on grid). Higher is better.",
 }
 
 
@@ -347,15 +347,17 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
 
 def _view_error_health(date_from_str, date_to_str, aggregation):
     with st.spinner("Loading uptime and health data..."):
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=5) as pool:
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
             f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
             f_incidents = pool.submit(_load_for_sites, query_incidents, date_from_str, date_to_str)
+            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
         df_health = f_health.result()
         df_uptime = f_uptime.result()
         df_port_uptime = f_port.result()
         df_incidents = f_incidents.result()
+        df_robot = f_robot.result()
 
     if df_health.empty:
         st.warning("No data returned.")
@@ -373,6 +375,15 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
         pivot = _aggregate_pivot(df_port_uptime, "uptime_pct", aggregation)
         _chart_title_with_info("Port Uptime")
         st.plotly_chart(_make_trend_chart(pivot, "Port Uptime", "Uptime %", pct=True), use_container_width=True)
+
+    if not df_robot.empty:
+        downtime_cols = ["recovery_pct", "unavailable_pct", "service_off_grid_pct", "service_on_grid_pct"]
+        available_cols = [c for c in downtime_cols if c in df_robot.columns]
+        if available_cols:
+            df_robot["robot_uptime_pct"] = 100.0 - df_robot[available_cols].sum(axis=1)
+            pivot = _aggregate_pivot(df_robot, "robot_uptime_pct", aggregation)
+            _chart_title_with_info("Robot Uptime")
+            st.plotly_chart(_make_trend_chart(pivot, "Robot Uptime", "Uptime %", pct=True), use_container_width=True)
 
     st.divider()
     st.markdown("#### Availability")
@@ -511,14 +522,7 @@ def _view_performance(date_from_str, date_to_str, aggregation):
         _chart_title_with_info("Robot Availability")
         st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
 
-    if not df_robot.empty:
-        downtime_cols = ["recovery_pct", "unavailable_pct", "service_off_grid_pct", "service_on_grid_pct"]
-        available_cols = [c for c in downtime_cols if c in df_robot.columns]
-        if available_cols:
-            df_robot["downtime_pct"] = df_robot[available_cols].sum(axis=1)
-            pivot = _aggregate_pivot(df_robot, "downtime_pct", aggregation)
-            _chart_title_with_info("Robot Downtime Breakdown")
-            st.plotly_chart(_make_trend_chart(pivot, "Robot Downtime Breakdown", "% Downtime", pct=True), use_container_width=True)
+
 
 
 def _view_battery_robots(date_from_str, date_to_str, aggregation):
