@@ -1,8 +1,12 @@
 import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
 from datetime import date, timedelta
 
-from cubeanalytics_utils import is_api_configured, get_installations, query_system_health
+from cubeanalytics_utils import (
+    is_api_configured, get_installations,
+    query_system_health, query_uptime, query_robot_state, query_bin_presentations,
+)
 
 st.set_page_config(page_title="CUBE Analytics", page_icon="📊", layout="wide")
 
@@ -13,41 +17,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("📊 CUBE Analytics — System Health")
+st.title("📊 CUBE Analytics")
 
 if not is_api_configured():
     st.warning("CubeAnalytics API token not configured. Add `[cubeanalytics] token` to Streamlit secrets.")
     st.stop()
-
-HEALTH_COLS = {
-    "health_index": "Health Index",
-    "uptime": "Uptime %",
-    "wait_bin": "Wait Bin (s)",
-    "waste_time": "Waste Time (s)",
-    "average_battery_score": "Battery",
-    "mtbf_h": "MTBF (h)",
-    "packet_loss": "Pkt Loss %",
-    "mbbd": "MBBD",
-}
-
-SCORE_COLS = {
-    "uptime_score": "Uptime",
-    "wait_time_score": "Wait Time",
-    "waste_time_score": "Waste Time",
-    "battery_score": "Battery",
-    "mtbf_score": "MTBF",
-    "packet_loss_score": "Pkt Loss",
-    "mbbd_score": "MBBD",
-}
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ Settings")
 
     if "cube_date_range" not in st.session_state:
-        st.session_state.cube_date_range = (
-            date.today() - timedelta(days=7), date.today(),
-        )
+        st.session_state.cube_date_range = (date.today() - timedelta(days=30), date.today())
 
     st.caption(f"Today: **{date.today().strftime('%b %d, %Y')}**")
     date_val = st.date_input(
@@ -84,67 +65,134 @@ with st.sidebar:
                     st.rerun()
 
     st.divider()
-    aggregation = st.radio("Aggregation", ["Day", "Week", "Month"], index=0, horizontal=True)
+    aggregation = st.radio("Aggregation", ["Day", "Week", "Month"], index=1, horizontal=True)
 
 if not dt_from or not dt_to:
     st.info("Select both start and end dates.")
     st.stop()
-
 if dt_from > dt_to:
     st.error("'From' date must be before 'To' date.")
     st.stop()
 
 
-# ── Load data for all installations ─────────────────────────────────────────
-@st.cache_data(ttl=300)
-def load_all_health(date_from_str, date_to_str):
+# ── Color palette matching Power BI style ────────────────────────────────────
+SITE_COLORS = [
+    "#5B9BD5", "#C5B200", "#8B4C6A", "#1F3864", "#7F7F7F",
+    "#6B8E5A", "#2E2E2E", "#A0522D", "#4E8C3F", "#D35400",
+]
+
+
+def make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=None, pct=False):
+    fig, ax = plt.subplots(figsize=(12, 4))
+    sites = pivot_df.columns.tolist()
+    for i, site in enumerate(sites):
+        color = SITE_COLORS[i % len(SITE_COLORS)]
+        ax.plot(pivot_df.index, pivot_df[site], color=color, linewidth=1.2, label=site, marker="", markersize=3)
+
+    if threshold is not None:
+        ax.axhline(y=threshold, color="#7ab648", linestyle="--", linewidth=1.5, alpha=0.7, label=threshold_label or "Threshold")
+
+    ax.set_title(title, fontsize=13, fontweight="bold", loc="left")
+    ax.set_ylabel(ylabel, fontsize=10)
+    ax.tick_params(axis="x", rotation=45, labelsize=8)
+    ax.tick_params(axis="y", labelsize=9)
+    if pct:
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.1f}%"))
+    ax.grid(axis="y", alpha=0.3)
+    ax.legend(
+        bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=7,
+        frameon=True, framealpha=0.9, edgecolor="#ccc",
+    )
+    fig.tight_layout()
+    return fig
+
+
+def aggregate_pivot(df, value_col, agg_mode):
+    if agg_mode == "Week":
+        df = df.copy()
+        df["period"] = df["date"].dt.to_period("W").dt.start_time
+    elif agg_mode == "Month":
+        df = df.copy()
+        df["period"] = df["date"].dt.to_period("M").dt.start_time
+    else:
+        df = df.copy()
+        df["period"] = df["date"]
+    grouped = df.groupby(["site", "period"])[value_col].mean().reset_index()
+    pivot = grouped.pivot(index="period", columns="site", values=value_col).sort_index()
+    if agg_mode == "Week":
+        pivot.index = pivot.index.strftime("W%V %Y")
+    elif agg_mode == "Month":
+        pivot.index = pivot.index.strftime("%Y-%m")
+    else:
+        pivot.index = pivot.index.strftime("%Y-%m-%d")
+    return pivot
+
+
+# ── Load all data ────────────────────────────────────────────────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def load_all_data(date_from_str, date_to_str):
     installations = get_installations()
-    frames = []
+    health_frames, uptime_frames, robot_frames, bp_frames = [], [], [], []
+
     for inst in installations:
-        df = query_system_health(inst["id"], date_from_str, date_to_str)
-        if df.empty:
-            continue
-        df["site"] = inst["name"]
-        df["city"] = inst["city"]
-        frames.append(df)
-    if not frames:
-        return pd.DataFrame()
-    return pd.concat(frames, ignore_index=True)
+        iid, name = inst["id"], inst["name"]
+
+        df_h = query_system_health(iid, date_from_str, date_to_str)
+        if not df_h.empty:
+            df_h["site"] = name
+            health_frames.append(df_h)
+
+        df_u = query_uptime(iid, date_from_str, date_to_str)
+        if not df_u.empty:
+            df_u["site"] = name
+            uptime_frames.append(df_u)
+
+        df_r = query_robot_state(iid, date_from_str, date_to_str)
+        if not df_r.empty:
+            df_r["site"] = name
+            robot_frames.append(df_r)
+
+        df_bp = query_bin_presentations(iid, date_from_str, date_to_str)
+        if not df_bp.empty:
+            df_bp["site"] = name
+            bp_frames.append(df_bp)
+
+    return {
+        "health": pd.concat(health_frames, ignore_index=True) if health_frames else pd.DataFrame(),
+        "uptime": pd.concat(uptime_frames, ignore_index=True) if uptime_frames else pd.DataFrame(),
+        "robot": pd.concat(robot_frames, ignore_index=True) if robot_frames else pd.DataFrame(),
+        "bp": pd.concat(bp_frames, ignore_index=True) if bp_frames else pd.DataFrame(),
+    }
 
 
-with st.spinner("Loading system health data for all sites..."):
-    df_all = load_all_health(str(dt_from), str(dt_to))
+with st.spinner("Loading data from CubeAnalytics API for all sites..."):
+    data = load_all_data(str(dt_from), str(dt_to))
 
-if df_all.empty:
+df_health = data["health"]
+df_uptime = data["uptime"]
+df_robot = data["robot"]
+df_bp = data["bp"]
+
+if df_health.empty:
     st.warning("No data returned for the selected date range.")
     st.stop()
 
-# ── Aggregate ────────────────────────────────────────────────────────────────
-if aggregation == "Week":
-    df_all["period"] = df_all["date"].dt.to_period("W").apply(lambda p: p.start_time).dt.normalize()
-elif aggregation == "Month":
-    df_all["period"] = df_all["date"].dt.to_period("M").apply(lambda p: p.start_time).dt.normalize()
-else:
-    df_all["period"] = df_all["date"].dt.normalize()
 
-numeric_cols = list(HEALTH_COLS.keys())
-agg_df = df_all.groupby(["site", "period"])[numeric_cols].mean().reset_index()
-for c in ["health_index", "uptime", "wait_bin", "waste_time", "average_battery_score", "packet_loss"]:
-    if c in agg_df.columns:
-        agg_df[c] = agg_df[c].round(2)
-for c in ["mtbf_h", "mbbd"]:
-    if c in agg_df.columns:
-        agg_df[c] = agg_df[c].round(0)
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 1: CURRENT HEALTH OVERVIEW
+# ══════════════════════════════════════════════════════════════════════════════
+st.header("Current Health — All Sites")
 
-# ── Latest snapshot table ────────────────────────────────────────────────────
-st.subheader("Current Health — All Sites")
+latest_date = df_health["date"].max()
+latest = df_health[df_health["date"] == latest_date][[
+    "site", "health_index", "uptime", "wait_bin", "waste_time",
+    "average_battery_score", "mtbf_h", "packet_loss", "mbbd",
+]].copy()
+latest.columns = ["Site", "Health", "Uptime %", "Wait (s)", "Waste (s)", "Battery", "MTBF (h)", "Pkt Loss %", "MBBD"]
+latest = latest.sort_values("Health", ascending=False).reset_index(drop=True)
 
-latest_date = df_all["date"].max()
-latest = df_all[df_all["date"] == latest_date][["site"] + list(HEALTH_COLS.keys())].copy()
-latest = latest.rename(columns=HEALTH_COLS)
-latest = latest.sort_values("Health Index", ascending=False).reset_index(drop=True)
 
-def color_health(val):
+def _color_health(val):
     if pd.isna(val):
         return ""
     if val >= 4.5:
@@ -153,7 +201,8 @@ def color_health(val):
         return "background-color: #ffeb9c"
     return "background-color: #ffc7ce"
 
-def color_uptime(val):
+
+def _color_uptime(val):
     if pd.isna(val):
         return ""
     if val >= 99.9:
@@ -162,60 +211,146 @@ def color_uptime(val):
         return "background-color: #ffeb9c"
     return "background-color: #ffc7ce"
 
-styled = latest.style.applymap(color_health, subset=["Health Index"]).applymap(color_uptime, subset=["Uptime %"])
+
+styled = latest.style.applymap(_color_health, subset=["Health"]).applymap(_color_uptime, subset=["Uptime %"])
 st.dataframe(styled, use_container_width=True, hide_index=True)
 st.caption(f"Data from: {latest_date.strftime('%Y-%m-%d')}")
 
-# ── Trend charts ─────────────────────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 2: ERROR & HEALTH METRICS
+# ══════════════════════════════════════════════════════════════════════════════
 st.divider()
-st.subheader(f"Trends ({aggregation})")
+st.header("Error & Health Metrics")
 
-metric_choice = st.selectbox(
-    "Metric",
-    list(HEALTH_COLS.keys()),
-    format_func=lambda k: HEALTH_COLS[k],
-)
+# System Uptime (recovery_up_ratio from uptime endpoint)
+if not df_uptime.empty:
+    df_uptime["system_uptime_pct"] = df_uptime["recovery_up_ratio"] * 100
+    pivot = aggregate_pivot(df_uptime, "system_uptime_pct", aggregation)
+    fig = make_trend_chart(pivot, "System Uptime", "Uptime", threshold=99.7, threshold_label="Target 99.7%", pct=True)
+    st.pyplot(fig)
+    plt.close(fig)
 
-pivot = agg_df.pivot(index="period", columns="site", values=metric_choice).sort_index()
-pivot.index = pivot.index.strftime("%Y-%m-%d")
-st.line_chart(pivot, use_container_width=True)
+# System Availability (up_ratio from uptime endpoint)
+if not df_uptime.empty:
+    df_uptime["system_availability_pct"] = df_uptime["up_ratio"] * 100
+    pivot = aggregate_pivot(df_uptime, "system_availability_pct", aggregation)
+    fig = make_trend_chart(pivot, "System Availability", "Availability", pct=True)
+    st.pyplot(fig)
+    plt.close(fig)
 
-# ── Per-site detail ──────────────────────────────────────────────────────────
+# Robot Availability
+if not df_robot.empty:
+    pivot = aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
+    fig = make_trend_chart(pivot, "Robot Availability", "% Available", pct=True)
+    st.pyplot(fig)
+    plt.close(fig)
+
+# Packet Loss
+if not df_health.empty and "packet_loss" in df_health.columns:
+    pivot = aggregate_pivot(df_health, "packet_loss", aggregation)
+    fig = make_trend_chart(pivot, "Packet Loss", "Packet Loss %", threshold=5.0, threshold_label="Target < 5%", pct=True)
+    st.pyplot(fig)
+    plt.close(fig)
+
+# MTBF
+if not df_health.empty and "mtbf_h" in df_health.columns:
+    pivot = aggregate_pivot(df_health, "mtbf_h", aggregation)
+    fig = make_trend_chart(pivot, "MTBF (Mean Time Between Failures)", "Hours")
+    st.pyplot(fig)
+    plt.close(fig)
+
+# MBBD
+if not df_health.empty and "mbbd" in df_health.columns:
+    pivot = aggregate_pivot(df_health, "mbbd", aggregation)
+    fig = make_trend_chart(pivot, "MBBD (Mean Bins Between Downtime)", "Bins")
+    st.pyplot(fig)
+    plt.close(fig)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 3: PERFORMANCE
+# ══════════════════════════════════════════════════════════════════════════════
 st.divider()
-st.subheader("Site Detail")
+st.header("Performance")
 
-sites = sorted(df_all["site"].unique())
-selected_site = st.selectbox("Select site", sites)
+# Wait Time (bin)
+if not df_health.empty and "wait_bin" in df_health.columns:
+    pivot = aggregate_pivot(df_health, "wait_bin", aggregation)
+    fig = make_trend_chart(pivot, "Wait Time", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s")
+    st.pyplot(fig)
+    plt.close(fig)
 
-site_df = agg_df[agg_df["site"] == selected_site].sort_values("period")
+# Waste Time
+if not df_health.empty and "waste_time" in df_health.columns:
+    pivot = aggregate_pivot(df_health, "waste_time", aggregation)
+    fig = make_trend_chart(pivot, "Waste Time", "Waste Time (s)", threshold=0.5, threshold_label="Target < 0.5s")
+    st.pyplot(fig)
+    plt.close(fig)
 
-if not site_df.empty:
-    metric_cols_present = [c for c in HEALTH_COLS if c in site_df.columns]
-    display_df = site_df[["period"] + metric_cols_present].rename(
-        columns={**{"period": aggregation}, **HEALTH_COLS}
-    )
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+# Wait User (from bin presentations)
+if not df_bp.empty and "avg_wait_user" in df_bp.columns:
+    pivot = aggregate_pivot(df_bp, "avg_wait_user", aggregation)
+    fig = make_trend_chart(pivot, "Wait User", "Wait User (s)")
+    st.pyplot(fig)
+    plt.close(fig)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        chart_data = site_df.set_index("period")[["health_index", "uptime"]].rename(
-            columns={"health_index": "Health Index", "uptime": "Uptime %"}
-        )
-        chart_data.index = chart_data.index.strftime("%Y-%m-%d")
-        st.line_chart(chart_data)
-    with col2:
-        chart_data2 = site_df.set_index("period")[["wait_bin", "waste_time"]].rename(
-            columns={"wait_bin": "Wait Bin (s)", "waste_time": "Waste Time (s)"}
-        )
-        chart_data2.index = chart_data2.index.strftime("%Y-%m-%d")
-        st.line_chart(chart_data2)
+# Bin Presentations count
+if not df_bp.empty and "bin_presentations" in df_bp.columns:
+    pivot = aggregate_pivot(df_bp, "bin_presentations", aggregation)
+    fig = make_trend_chart(pivot, "Bin Presentations", "Count")
+    st.pyplot(fig)
+    plt.close(fig)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 4: BATTERY & ROBOTS
+# ══════════════════════════════════════════════════════════════════════════════
+st.divider()
+st.header("Battery & Robots")
+
+# Battery Score
+if not df_health.empty and "average_battery_score" in df_health.columns:
+    pivot = aggregate_pivot(df_health, "average_battery_score", aggregation)
+    fig = make_trend_chart(pivot, "Average Battery Score", "Score (1-5)")
+    st.pyplot(fig)
+    plt.close(fig)
+
+# Robot Working %
+if not df_robot.empty and "working_pct" in df_robot.columns:
+    pivot = aggregate_pivot(df_robot, "working_pct", aggregation)
+    fig = make_trend_chart(pivot, "Robot Working %", "% Working", pct=True)
+    st.pyplot(fig)
+    plt.close(fig)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SECTION 5: HEALTH INDEX TREND
+# ══════════════════════════════════════════════════════════════════════════════
+st.divider()
+st.header("Health Index")
+
+if not df_health.empty and "health_index" in df_health.columns:
+    pivot = aggregate_pivot(df_health, "health_index", aggregation)
+    fig = make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target ≥ 4.0")
+    st.pyplot(fig)
+    plt.close(fig)
+
 
 # ── Download ─────────────────────────────────────────────────────────────────
 st.divider()
-csv_bytes = agg_df.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "⬇️ Download all data as CSV",
-    data=csv_bytes,
-    file_name=f"cube_analytics_health_{dt_from}_{dt_to}.csv",
-    mime="text/csv",
-)
+all_frames = []
+for key, df in data.items():
+    if not df.empty:
+        df_copy = df.copy()
+        df_copy["source"] = key
+        all_frames.append(df_copy)
+if all_frames:
+    export_df = pd.concat(all_frames, ignore_index=True)
+    csv_bytes = export_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "⬇️ Download all data as CSV",
+        data=csv_bytes,
+        file_name=f"cube_analytics_{dt_from}_{dt_to}.csv",
+        mime="text/csv",
+    )

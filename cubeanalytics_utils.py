@@ -95,6 +95,119 @@ def query_system_health(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=300)
+def query_uptime(installation_id, date_from_str, date_to_str):
+    url = f"{BASE_URL}/installations/{installation_id}/uptime/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        r = day_result.get("result", {})
+        rows.append({
+            "date": day_result.get("date"),
+            "up_ratio": r.get("up_ratio"),
+            "recovery_up_ratio": r.get("recovery_up_ratio"),
+            "up_seconds": r.get("up_seconds"),
+            "down_seconds": r.get("down_seconds"),
+            "recovery_seconds": r.get("recovery_seconds"),
+            "total_seconds": r.get("total_seconds"),
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=300)
+def query_robot_state(installation_id, date_from_str, date_to_str):
+    url = f"{BASE_URL}/installations/{installation_id}/robot-state/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        robot_states = day_result.get("result", {}).get("robot_states", {})
+        all_robots = []
+        if isinstance(robot_states, dict):
+            for hour_robots in robot_states.values():
+                if isinstance(hour_robots, list):
+                    all_robots.extend(hour_robots)
+        elif isinstance(robot_states, list):
+            all_robots = robot_states
+
+        total_time = sum(r.get("total_time_s", 0) for r in all_robots)
+        if total_time == 0:
+            continue
+
+        avail = sum(r.get("available", 0) for r in all_robots)
+        charging_avail = sum(r.get("charging_available", 0) for r in all_robots)
+        working = sum(r.get("working", 0) for r in all_robots)
+        recovery = sum(r.get("recovery", 0) for r in all_robots)
+        unavailable = sum(r.get("unavailable", 0) for r in all_robots)
+        charging_unavail = sum(r.get("charging_unavailable", 0) for r in all_robots)
+        service_on = sum(r.get("service_on_grid", 0) for r in all_robots)
+        service_off = sum(r.get("service_off_grid", 0) for r in all_robots)
+
+        rows.append({
+            "date": day_result.get("date"),
+            "robot_availability_pct": (avail + charging_avail) / total_time * 100,
+            "working_pct": working / total_time * 100,
+            "charging_available_pct": charging_avail / total_time * 100,
+            "available_pct": avail / total_time * 100,
+            "recovery_pct": recovery / total_time * 100,
+            "unavailable_pct": unavailable / total_time * 100,
+            "charging_unavailable_pct": charging_unavail / total_time * 100,
+            "service_on_grid_pct": service_on / total_time * 100,
+            "service_off_grid_pct": service_off / total_time * 100,
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=300)
+def query_bin_presentations(installation_id, date_from_str, date_to_str):
+    url = f"{BASE_URL}/installations/{installation_id}/bin-presentations/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        bp_list = day_result.get("result", {}).get("bin_presentations", [])
+        total_count = sum(bp.get("count", 0) for bp in bp_list)
+        total_picks = sum(bp.get("picks", 0) for bp in bp_list)
+        total_goods_in = sum(bp.get("goods_in", 0) for bp in bp_list)
+        total_count_all = sum(bp.get("count_all_bins", 0) for bp in bp_list)
+
+        w_bins = [bp.get("average_wait_bin", 0) * bp.get("count", 1) for bp in bp_list if bp.get("count", 0) > 0]
+        w_users = [bp.get("average_wait_user", 0) * bp.get("count", 1) for bp in bp_list if bp.get("count", 0) > 0]
+        w_wastes = [bp.get("average_waste_time", 0) * bp.get("count", 1) for bp in bp_list if bp.get("count", 0) > 0]
+
+        rows.append({
+            "date": day_result.get("date"),
+            "bin_presentations": total_count,
+            "picks": total_picks,
+            "goods_in": total_goods_in,
+            "all_bins": total_count_all,
+            "avg_wait_bin": sum(w_bins) / total_count if total_count else 0,
+            "avg_wait_user": sum(w_users) / total_count if total_count else 0,
+            "avg_waste_time": sum(w_wastes) / total_count if total_count else 0,
+            "num_ports": len(bp_list),
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=300)
 def query_port_wait_time(installation_id, date_from_str, date_to_str):
     """Fetch port-bin-wait-time data and return a DataFrame matching the CSV format.
 
