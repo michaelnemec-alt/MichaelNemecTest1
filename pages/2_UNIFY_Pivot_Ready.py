@@ -12,6 +12,13 @@ st.set_page_config(
     layout="wide",
 )
 
+st.markdown(
+    "<style>"
+    "section[data-testid='stSidebar'] button {font-size: 10px !important; padding: 4px 8px !important; min-height: 0 !important;}"
+    "</style>",
+    unsafe_allow_html=True,
+)
+
 st.title("🔄 UNIFY Pivot Ready")
 st.markdown(
     "Convert Unify Analytics / CubeAnalytics data into **pivot-ready long format** CSV."
