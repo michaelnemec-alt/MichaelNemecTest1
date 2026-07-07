@@ -50,8 +50,10 @@ METRIC_INFO = {
     "Robot Uptime": "Percentage of total robot time spent in productive or ready states (100% minus recovery, unavailable, service off grid, and parked on grid). Higher is better.",
     "Error Stopped System True": "Count of robot errors per day that caused the AutoStore system to stop. These are critical errors requiring immediate intervention. Lower is better.",
     "Error Stopped System False": "Count of robot errors per day that were resolved without stopping the system. The system continued operating while the error was handled. High counts are normal.",
-    "Bin Quality Errors": "Count of robot errors related to bin quality issues (damaged, overfilled, stuck bins). These are operational problems that can be improved through better bin management.",
-    "Technical Errors": "Count of robot errors caused by technical/mechanical issues (motor failures, track shifts, sensor problems). These are facility/maintenance problems.",
+    "Operations Errors %": "Percentage of total robot errors classified as operations problems (is_bin_quality=True and is_port=False). These are errors caused by bin handling issues that can be improved through better operational practices.",
+    "Facility Errors %": "Percentage of total robot errors classified as facility/technical problems (is_bin_quality=False). These are mechanical or infrastructure issues requiring maintenance or engineering intervention.",
+    "Operations Errors": "Count of robot errors classified as operations problems (is_bin_quality=True and is_port=False). Bin handling issues.",
+    "Facility Errors": "Count of robot errors classified as facility/technical problems (is_bin_quality=False). Mechanical or infrastructure issues.",
 }
 
 
@@ -597,13 +599,11 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
         health_tab = "Health Overview"
 
     with st.spinner("Loading health index data..."):
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=2) as pool:
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_robot_errors = pool.submit(_load_for_sites, query_robot_errors, date_from_str, date_to_str)
-            f_incidents = pool.submit(_load_for_sites, query_incidents, date_from_str, date_to_str)
         df_health = f_health.result()
         df_robot_errors = f_robot_errors.result()
-        df_incidents = f_incidents.result()
 
     if df_health.empty:
         st.warning("No data returned.")
@@ -635,12 +635,22 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
     elif health_tab == "Facility vs Ops Overview":
         st.markdown("#### Facility vs Ops Overview")
 
-        if not df_incidents.empty:
-            pivot_inc = _aggregate_pivot_sum(df_incidents, "incident_count", aggregation)
-            _chart_title_with_info("Incident Count")
-            st.plotly_chart(_make_trend_chart(pivot_inc, "Incident Count", "Count"), use_container_width=True)
-
         if not df_robot_errors.empty:
+            st.markdown("#### Operations vs Facility — % Share")
+
+            pivot_ops_sum = _aggregate_pivot_sum(df_robot_errors, "ops_errors", aggregation)
+            pivot_fac_sum = _aggregate_pivot_sum(df_robot_errors, "facility_errors", aggregation)
+            pivot_total = _aggregate_pivot_sum(df_robot_errors, "total_errors", aggregation)
+
+            pivot_ops_pct = (pivot_ops_sum / pivot_total * 100).fillna(0)
+            pivot_fac_pct = (pivot_fac_sum / pivot_total * 100).fillna(0)
+
+            _chart_title_with_info("Operations Errors %")
+            st.plotly_chart(_make_trend_chart(pivot_ops_pct, "Operations Errors %", "%", pct=True), use_container_width=True)
+
+            _chart_title_with_info("Facility Errors %")
+            st.plotly_chart(_make_trend_chart(pivot_fac_pct, "Facility Errors %", "%", pct=True), use_container_width=True)
+
             st.divider()
             st.markdown("#### Error Stopped System")
 
@@ -653,12 +663,10 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
             st.plotly_chart(_make_trend_chart(pivot_false, "Error Stopped System False", "Count"), use_container_width=True)
 
             st.divider()
-            st.markdown("#### Bin Quality (Ops) vs Technical (Facility)")
+            st.markdown("#### Operations vs Facility — Counts")
 
-            pivot_bq = _aggregate_pivot_sum(df_robot_errors, "bin_quality_true", aggregation)
-            _chart_title_with_info("Bin Quality Errors")
-            st.plotly_chart(_make_trend_chart(pivot_bq, "Bin Quality Errors", "Count"), use_container_width=True)
+            _chart_title_with_info("Operations Errors")
+            st.plotly_chart(_make_trend_chart(pivot_ops_sum, "Operations Errors", "Count"), use_container_width=True)
 
-            pivot_tech = _aggregate_pivot_sum(df_robot_errors, "bin_quality_false", aggregation)
-            _chart_title_with_info("Technical Errors")
-            st.plotly_chart(_make_trend_chart(pivot_tech, "Technical Errors", "Count"), use_container_width=True)
+            _chart_title_with_info("Facility Errors")
+            st.plotly_chart(_make_trend_chart(pivot_fac_sum, "Facility Errors", "Count"), use_container_width=True)
