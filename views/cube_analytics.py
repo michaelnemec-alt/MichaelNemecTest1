@@ -314,25 +314,6 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     st.dataframe(styled, use_container_width=True, hide_index=True)
     st.caption(f"Data from: {latest_date.strftime('%Y-%m-%d')}")
 
-    col_title, col_info = st.columns([8, 1])
-    with col_title:
-        st.markdown("#### Health Index Trend")
-    with col_info:
-        with st.popover("..."):
-            st.markdown("""**Health Index (1-5 scale)**
-
-Composite score of 7 component scores:
-- **5.0** = Excellent — all metrics optimal
-- **4.0-4.9** = Good — target range
-- **3.0-3.9** = Room for improvement
-- **< 3.0** = Needs attention
-
-**Components:** Uptime, Wait Time, Waste Time, Battery, MTBF, Packet Loss, MBBD
-
-Each component scores 1-3 (Good / Room for Improvement). The health index is a weighted composite rounded to 2 decimals.
-
-The dashed green line at 4.0 = target threshold.""")
-
     pivot = _aggregate_pivot(df_health, "health_index", aggregation)
     _chart_title_with_info("Health Index")
     st.plotly_chart(_make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target >= 4.0"), use_container_width=True)
