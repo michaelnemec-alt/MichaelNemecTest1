@@ -33,85 +33,36 @@ section[data-testid="stSidebar"] button {
 }
 
 .footer { text-align:center; color:#d1d5db; font-size:0.78em; padding:40px 0 10px 0; }
-
-/* Nav bar — no gaps between buttons */
-.nav-bar [data-testid="stHorizontalBlock"] { gap: 0 !important; }
-.nav-bar [data-testid="stHorizontalBlock"] > div { padding: 0 !important; }
-
-/* Nav buttons — gray gradient style */
-.nav-bar button,
-.nav-bar [data-testid="stPopoverButton"] > button {
-    background: linear-gradient(90deg, #4a4a4a, #6b6b6b) !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 0 !important;
-    padding: 10px 16px !important;
-    font-size: 13px !important;
-    font-weight: 600 !important;
-    min-height: 40px !important;
-    width: 100% !important;
-    box-shadow: none !important;
-    transition: all 0.3s ease !important;
-    border-right: 1px solid rgba(255,255,255,0.15) !important;
-}
-.nav-bar button:hover,
-.nav-bar [data-testid="stPopoverButton"] > button:hover {
-    background: linear-gradient(90deg, #5a5a5a, #7b7b7b) !important;
-}
-/* Round left edge of first and right edge of last button */
-.nav-bar [data-testid="stHorizontalBlock"] > div:first-child button { border-radius: 8px 0 0 8px !important; }
-.nav-bar [data-testid="stHorizontalBlock"] > div:last-child button,
-.nav-bar [data-testid="stHorizontalBlock"] > div:last-child [data-testid="stPopoverButton"] > button {
-    border-radius: 0 8px 8px 0 !important;
-    border-right: none !important;
-}
-/* Popover panel styling */
-[data-testid="stPopover"] [data-testid="stPopoverBody"] {
-    border-top: 3px solid #4a4a4a !important;
-    border-radius: 8px !important;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15) !important;
-}
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>", unsafe_allow_html=True)
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
+PAGES = ["Home", "Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "CUBE Analytics"]
 CUBE_VIEWS = ["Overview & Health", "Error & Health Metrics", "Performance", "Battery & Robots", "Health Index"]
 
-if "active_page" not in st.session_state:
-    st.session_state.active_page = "Home"
+selected = st.segmented_control(
+    "nav",
+    options=PAGES,
+    default="Home",
+    key="nav_selection",
+    label_visibility="collapsed",
+)
 
-st.markdown('<div class="nav-bar">', unsafe_allow_html=True)
-col1, col2, col3, col4, col5 = st.columns(5, gap="small")
+if not selected:
+    selected = "Home"
 
-with col1:
-    if st.button("Home", key="nav_home", use_container_width=True):
-        st.session_state.active_page = "Home"
-with col2:
-    if st.button("Prio vs Picking", key="nav_prio", use_container_width=True):
-        st.session_state.active_page = "Prio vs Picking"
-with col3:
-    if st.button("UNIFY Pivot Ready", key="nav_unify", use_container_width=True):
-        st.session_state.active_page = "UNIFY Pivot Ready"
-with col4:
-    if st.button("Day Evaluation", key="nav_day", use_container_width=True):
-        st.session_state.active_page = "Day Evaluation"
-with col5:
-    with st.popover("☰ CUBE Analytics", use_container_width=True):
-        cube_view = st.radio(
-            "Select view",
-            CUBE_VIEWS,
-            index=0,
-            key="cube_nav_selection",
-            label_visibility="collapsed",
-        )
-        if st.button("Open", key="nav_cube_go", use_container_width=True):
-            st.session_state.active_page = "CUBE Analytics"
-
-st.markdown('</div>', unsafe_allow_html=True)
-selected = st.session_state.active_page
-cube_view = cube_view if selected == "CUBE Analytics" else None
+if selected == "CUBE Analytics":
+    cube_view = st.segmented_control(
+        "cube_nav",
+        options=CUBE_VIEWS,
+        default="Overview & Health",
+        key="cube_nav_selection",
+        label_visibility="collapsed",
+    )
+    if not cube_view:
+        cube_view = "Overview & Health"
 
 st.markdown("<br>", unsafe_allow_html=True)
 
