@@ -46,14 +46,21 @@ METRIC_INFO = {
 
 def _chart_title_with_info(title):
     info = METRIC_INFO.get(title, "No description available.")
-    info_escaped = info.replace('"', '&quot;').replace("'", "&#39;")
+    info_escaped = info.replace('"', '&quot;').replace("'", "&#39;").replace("\n", "<br>")
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:-8px;">'
         f'<span style="font-size:14px;font-weight:600;color:#1F3864;">{title}</span>'
-        f'<span style="display:inline-flex;align-items:center;justify-content:center;'
-        f'width:18px;height:18px;border-radius:50%;background:#e8edf3;color:#5B9BD5;'
-        f'font-size:11px;font-weight:700;cursor:help;position:relative;" title="{info_escaped}">'
-        f'i</span></div>',
+        f'<span class="info-icon-wrap" style="display:inline-flex;align-items:center;'
+        f'justify-content:center;width:18px;height:18px;border-radius:50%;background:#e8edf3;'
+        f'color:#5B9BD5;font-size:11px;font-weight:700;cursor:help;position:relative;">'
+        f'i<span class="info-tooltip" style="display:none;position:absolute;left:24px;top:-8px;'
+        f'background:#1F3864;color:white;padding:10px 14px;border-radius:6px;font-size:12px;'
+        f'font-weight:400;width:280px;line-height:1.5;z-index:1000;'
+        f'box-shadow:0 4px 12px rgba(0,0,0,0.15);white-space:normal;">'
+        f'{info_escaped}</span></span></div>'
+        f'<style>'
+        f'.info-icon-wrap:hover .info-tooltip {{display:block !important;}}'
+        f'</style>',
         unsafe_allow_html=True,
     )
 
