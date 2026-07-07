@@ -319,16 +319,14 @@ The dashed green line at 4.0 = target threshold.""")
 
 
 def _view_error_health(date_from_str, date_to_str, aggregation):
-    with st.spinner("Loading uptime, robot state, and health data..."):
-        with ThreadPoolExecutor(max_workers=5) as pool:
+    with st.spinner("Loading uptime and health data..."):
+        with ThreadPoolExecutor(max_workers=4) as pool:
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
-            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
             f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
             f_incidents = pool.submit(_load_for_sites, query_incidents, date_from_str, date_to_str)
         df_health = f_health.result()
         df_uptime = f_uptime.result()
-        df_robot = f_robot.result()
         df_port_uptime = f_port.result()
         df_incidents = f_incidents.result()
 
@@ -349,11 +347,6 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
         pivot = _aggregate_pivot(df_uptime, "system_availability_pct", aggregation)
         _chart_title_with_info("System Availability")
         st.plotly_chart(_make_trend_chart(pivot, "System Availability", "Availability", pct=True), use_container_width=True)
-
-    if not df_robot.empty:
-        pivot = _aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
-        _chart_title_with_info("Robot Availability")
-        st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
 
     if not df_port_uptime.empty:
         pivot = _aggregate_pivot(df_port_uptime, "uptime_pct", aggregation)
