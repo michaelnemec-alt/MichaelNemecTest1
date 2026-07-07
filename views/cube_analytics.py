@@ -129,22 +129,24 @@ def render():
             st.session_state.cube_preset = preset
 
         active = st.session_state.cube_preset
-        if active == "Custom":
-            if "cube_custom_range" not in st.session_state:
-                st.session_state.cube_custom_range = (date.today() - timedelta(days=30), date.today())
-            date_val = st.date_input("Select dates", value=st.session_state.cube_custom_range,
-                                      max_value=date.today(), key="cube_custom_dt")
-            if isinstance(date_val, tuple) and len(date_val) == 2:
-                dt_from, dt_to = date_val
-                st.session_state.cube_custom_range = date_val
-            else:
-                dt_from, dt_to = (date_val[0] if isinstance(date_val, tuple) else date_val), None
-        else:
+        if active != "Custom":
             preset_map = {"Yesterday": (1, 1), "7 days": (7, 0), "14 days": (14, 0),
                           "30 days": (30, 0), "60 days": (60, 0), "90 days": (90, 0)}
             days_back, end_off = preset_map.get(active, (30, 0))
-            dt_from = date.today() - timedelta(days=days_back)
-            dt_to = date.today() - timedelta(days=end_off)
+            computed_from = date.today() - timedelta(days=days_back)
+            computed_to = date.today() - timedelta(days=end_off)
+            st.session_state.cube_custom_range = (computed_from, computed_to)
+
+        if "cube_custom_range" not in st.session_state:
+            st.session_state.cube_custom_range = (date.today() - timedelta(days=30), date.today())
+
+        date_val = st.date_input("Select dates", value=st.session_state.cube_custom_range,
+                                  max_value=date.today(), key="cube_custom_dt")
+        if isinstance(date_val, tuple) and len(date_val) == 2:
+            dt_from, dt_to = date_val
+            st.session_state.cube_custom_range = date_val
+        else:
+            dt_from, dt_to = (date_val[0] if isinstance(date_val, tuple) else date_val), None
 
         st.divider()
         aggregation = st.radio("Aggregation", ["Day", "Week", "Month"], index=1, horizontal=True, key="cube_agg")
