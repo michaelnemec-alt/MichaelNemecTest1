@@ -26,7 +26,7 @@ VIEWS = [
     "Error & Health Metrics",
     "Performance",
     "Battery & Robots",
-    "Health Index",
+    "Health Index *",
 ]
 
 METRIC_INFO = {
@@ -50,6 +50,8 @@ METRIC_INFO = {
     "Robot Uptime": "Percentage of total robot time spent in productive or ready states (100% minus recovery, unavailable, service off grid, and parked on grid). Higher is better.",
     "Error Stopped System True": "Count of robot errors per day that caused the AutoStore system to stop. These are critical errors requiring immediate intervention. Lower is better.",
     "Error Stopped System False": "Count of robot errors per day that were resolved without stopping the system. The system continued operating while the error was handled. High counts are normal.",
+    "Bin Quality Errors": "Count of robot errors related to bin quality issues (damaged, overfilled, stuck bins). These are operational problems that can be improved through better bin management.",
+    "Technical Errors": "Count of robot errors caused by technical/mechanical issues (motor failures, track shifts, sensor problems). These are facility/maintenance problems.",
 }
 
 
@@ -247,7 +249,7 @@ def render(selected_view="Overview & Health"):
             _view_performance(date_from_str, date_to_str, aggregation)
         elif selected_view == "Battery & Robots":
             _view_battery_robots(date_from_str, date_to_str, aggregation)
-        elif selected_view == "Health Index":
+        elif selected_view == "Health Index *":
             _view_health_index(date_from_str, date_to_str, aggregation)
         logger.info("=== render() completed successfully for '%s' ===", selected_view)
     except Exception as e:
@@ -563,47 +565,80 @@ def _aggregate_pivot_sum(df, value_col, agg_mode):
 
 
 def _view_health_index(date_from_str, date_to_str, aggregation):
+    HEALTH_TABS = ["Health Overview", "Facility vs Ops Overview"]
+    health_tab = st.segmented_control(
+        "health_nav",
+        options=HEALTH_TABS,
+        default="Health Overview",
+        key="health_tab_selection",
+        label_visibility="collapsed",
+    )
+    if not health_tab:
+        health_tab = "Health Overview"
+
     with st.spinner("Loading health index data..."):
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ThreadPoolExecutor(max_workers=3) as pool:
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_robot_errors = pool.submit(_load_for_sites, query_robot_errors, date_from_str, date_to_str)
+            f_incidents = pool.submit(_load_for_sites, query_incidents, date_from_str, date_to_str)
         df_health = f_health.result()
         df_robot_errors = f_robot_errors.result()
+        df_incidents = f_incidents.result()
 
     if df_health.empty:
         st.warning("No data returned.")
         return
 
-    st.markdown("#### Health Index")
+    if health_tab == "Health Overview":
+        st.markdown("#### Health Index")
 
-    pivot = _aggregate_pivot(df_health, "health_index", aggregation)
-    _chart_title_with_info("Health Index")
-    st.plotly_chart(_make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target >= 4.0"), use_container_width=True)
+        pivot = _aggregate_pivot(df_health, "health_index", aggregation)
+        _chart_title_with_info("Health Index")
+        st.plotly_chart(_make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target >= 4.0"), use_container_width=True)
 
-    if not df_robot_errors.empty:
         st.divider()
-        st.markdown("#### Error Stopped System")
+        metric_choice = st.selectbox(
+            "Explore other metric",
+            ["uptime", "wait_bin", "waste_time", "average_battery_score", "packet_loss", "mtbf_h", "mbbd"],
+            format_func=lambda k: {
+                "uptime": "Uptime %", "wait_bin": "Wait Bin (s)", "waste_time": "Waste Time (s)",
+                "average_battery_score": "Battery Score", "packet_loss": "Packet Loss %",
+                "mtbf_h": "MTBF (h)", "mbbd": "MBBD",
+            }.get(k, k),
+            key="cube_explore_metric",
+        )
+        if metric_choice in df_health.columns:
+            pct = metric_choice in ("uptime", "packet_loss")
+            pivot = _aggregate_pivot(df_health, metric_choice, aggregation)
+            st.plotly_chart(_make_trend_chart(pivot, metric_choice.replace("_", " ").title(), metric_choice, pct=pct), use_container_width=True)
 
-        pivot_true = _aggregate_pivot_sum(df_robot_errors, "error_stopped_true", aggregation)
-        _chart_title_with_info("Error Stopped System True")
-        st.plotly_chart(_make_trend_chart(pivot_true, "Error Stopped System True", "Count"), use_container_width=True)
+    elif health_tab == "Facility vs Ops Overview":
+        st.markdown("#### Facility vs Ops Overview")
 
-        pivot_false = _aggregate_pivot_sum(df_robot_errors, "error_stopped_false", aggregation)
-        _chart_title_with_info("Error Stopped System False")
-        st.plotly_chart(_make_trend_chart(pivot_false, "Error Stopped System False", "Count"), use_container_width=True)
+        if not df_incidents.empty:
+            pivot_inc = _aggregate_pivot_sum(df_incidents, "incident_count", aggregation)
+            _chart_title_with_info("Incident Count")
+            st.plotly_chart(_make_trend_chart(pivot_inc, "Incident Count", "Count"), use_container_width=True)
 
-    st.divider()
-    metric_choice = st.selectbox(
-        "Explore other metric",
-        ["uptime", "wait_bin", "waste_time", "average_battery_score", "packet_loss", "mtbf_h", "mbbd"],
-        format_func=lambda k: {
-            "uptime": "Uptime %", "wait_bin": "Wait Bin (s)", "waste_time": "Waste Time (s)",
-            "average_battery_score": "Battery Score", "packet_loss": "Packet Loss %",
-            "mtbf_h": "MTBF (h)", "mbbd": "MBBD",
-        }.get(k, k),
-        key="cube_explore_metric",
-    )
-    if metric_choice in df_health.columns:
-        pct = metric_choice in ("uptime", "packet_loss")
-        pivot = _aggregate_pivot(df_health, metric_choice, aggregation)
-        st.plotly_chart(_make_trend_chart(pivot, metric_choice.replace("_", " ").title(), metric_choice, pct=pct), use_container_width=True)
+        if not df_robot_errors.empty:
+            st.divider()
+            st.markdown("#### Error Stopped System")
+
+            pivot_true = _aggregate_pivot_sum(df_robot_errors, "error_stopped_true", aggregation)
+            _chart_title_with_info("Error Stopped System True")
+            st.plotly_chart(_make_trend_chart(pivot_true, "Error Stopped System True", "Count"), use_container_width=True)
+
+            pivot_false = _aggregate_pivot_sum(df_robot_errors, "error_stopped_false", aggregation)
+            _chart_title_with_info("Error Stopped System False")
+            st.plotly_chart(_make_trend_chart(pivot_false, "Error Stopped System False", "Count"), use_container_width=True)
+
+            st.divider()
+            st.markdown("#### Bin Quality (Ops) vs Technical (Facility)")
+
+            pivot_bq = _aggregate_pivot_sum(df_robot_errors, "bin_quality_true", aggregation)
+            _chart_title_with_info("Bin Quality Errors")
+            st.plotly_chart(_make_trend_chart(pivot_bq, "Bin Quality Errors", "Count"), use_container_width=True)
+
+            pivot_tech = _aggregate_pivot_sum(df_robot_errors, "bin_quality_false", aggregation)
+            _chart_title_with_info("Technical Errors")
+            st.plotly_chart(_make_trend_chart(pivot_tech, "Technical Errors", "Count"), use_container_width=True)

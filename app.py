@@ -45,8 +45,8 @@ section[data-testid="stSidebar"] button {
 st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>", unsafe_allow_html=True)
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
-PAGES = ["Home", "Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "CUBE Analytics"]
-CUBE_VIEWS = ["Overview & Health", "Error & Health Metrics", "Performance", "Battery & Robots", "Health Index"]
+PAGES = ["Home", "Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "CUBE Analytics *"]
+CUBE_VIEWS = ["Overview & Health", "Error & Health Metrics", "Performance", "Battery & Robots", "Health Index *"]
 
 selected = st.segmented_control(
     "nav",
@@ -59,7 +59,7 @@ selected = st.segmented_control(
 if not selected:
     selected = "Home"
 
-if selected == "CUBE Analytics":
+if selected == "CUBE Analytics *":
     cube_view = st.segmented_control(
         "cube_nav",
         options=CUBE_VIEWS,
@@ -126,7 +126,7 @@ elif selected == "Day Evaluation":
     from views.day_evaluation import render
     render()
 
-elif selected == "CUBE Analytics":
+elif selected == "CUBE Analytics *":
     from views.cube_analytics import render
     logger.info("Rendering CUBE Analytics view: %s", cube_view or "Overview & Health")
     render(cube_view or "Overview & Health")

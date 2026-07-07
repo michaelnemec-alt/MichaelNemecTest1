@@ -277,10 +277,14 @@ def query_robot_errors(installation_id, date_from_str, date_to_str):
         errors = day_result.get("result", {}).get("robot_errors", [])
         stopped_true = sum(1 for e in errors if e.get("error_stopped_system") is True)
         stopped_false = sum(1 for e in errors if e.get("error_stopped_system") is False)
+        bin_quality_true = sum(1 for e in errors if e.get("is_bin_quality") is True)
+        bin_quality_false = sum(1 for e in errors if e.get("is_bin_quality") is False)
         rows.append({
             "date": day_result.get("date"),
             "error_stopped_true": stopped_true,
             "error_stopped_false": stopped_false,
+            "bin_quality_true": bin_quality_true,
+            "bin_quality_false": bin_quality_false,
         })
 
     if not rows:
