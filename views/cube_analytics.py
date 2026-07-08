@@ -92,6 +92,9 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
     color_map = {site: SITE_COLORS[i % len(SITE_COLORS)] for i, site in enumerate(sites)}
     highlight = st.session_state.get("cube_highlight", "All sites")
     has_highlight = highlight and highlight != "All sites" and highlight in sites
+    if has_highlight:
+        # Draw the highlighted site last so its solid line sits on top of the dimmed ones.
+        sorted_sites = [s for s in sorted_sites if s != highlight] + [highlight]
     for site in sorted_sites:
         color = color_map[site]
         vals = pivot_df[site]
