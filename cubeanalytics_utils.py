@@ -1,5 +1,6 @@
 """CubeAnalytics API helpers."""
 
+import re
 import streamlit as st
 import pandas as pd
 import requests
@@ -320,6 +321,111 @@ def query_robot_errors(installation_id, date_from_str, date_to_str):
     df = pd.DataFrame(list(rows_by_date.values()))
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
+
+
+# A manual (console) stop is treated as recovery from a tolerated error only when it
+# follows a delayed-stop robot error within this window.
+_DELAYED_STOP_WINDOW_S = 35 * 60
+# Stop code that marks a system that was force-stopped by a robot error.
+_ERROR_STOP_CODE = "XHANDLER_ROBOT_ERROR_FAILED"
+_CONSOLE_STOP_CODE = "STOPPED_FROM_CONSOLE"
+
+
+def _iter_event_log_system_mode(installation_id, params):
+    """Stream the event-log endpoint, yielding only 'System mode' events.
+
+    The event-log is very heavy (~90k events/site/week), most of it robot notify /
+    port / recovery noise. We discard everything except System mode transitions per
+    page so memory stays tiny (~a few hundred rows per month).
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/event-log/"
+    while url:
+        resp = requests.get(url, headers=_headers(), params=params, timeout=120)
+        resp.raise_for_status()
+        data = resp.json()
+        for day_result in data.get("results", []):
+            for e in day_result.get("result", {}).get("event_log", []):
+                if e.get("event", "").startswith("System mode"):
+                    yield e
+        url = data.get("next")
+        params = None
+
+
+def _parse_stop_code(event):
+    parts = event.split("\t")
+    if len(parts) >= 3:
+        return re.sub(r"^\[\d+\]", "", parts[2])
+    return _CONSOLE_STOP_CODE
+
+
+@st.cache_data(ttl=300)
+def query_recovery_times(installation_id, date_from_str, date_to_str):
+    """Reconstruct 'time to recover' events from the event-log.
+
+    Returns one row per recovery event with columns:
+      date, category ('error_stop' | 'manual_delayed'), recovery_seconds
+
+    - error_stop: system force-stopped by a robot error (stop code
+      XHANDLER_ROBOT_ERROR_FAILED). Recovery = STOPPED -> next RUNNING.
+    - manual_delayed: system tolerated an error (delayed_stop) and kept running,
+      then an operator manually stopped it (STOPPED_FROM_CONSOLE) within the
+      delayed-stop window to fix it. Recovery = STOPPED -> next RUNNING.
+    """
+    params = {"after": date_from_str, "before": date_to_str}
+
+    # Sorted timeline of System mode events.
+    evs = []
+    for e in _iter_event_log_system_mode(installation_id, params):
+        ts = e.get("local_timestamp")
+        if ts:
+            evs.append((pd.to_datetime(ts, errors="coerce"), e.get("event", "")))
+    evs = [x for x in evs if pd.notna(x[0])]
+    evs.sort(key=lambda x: x[0])
+
+    # Delayed-stop robot error timestamps (for linking manual stops).
+    re_results = _fetch_all_pages(
+        f"{BASE_URL}/installations/{installation_id}/robot-errors/", dict(params))
+    delayed_ts = []
+    for day_result in re_results:
+        for er in day_result.get("result", {}).get("robot_errors", []):
+            if er.get("delayed_stop"):
+                t = pd.to_datetime(er.get("local_installation_timestamp"), errors="coerce")
+                if pd.notna(t):
+                    delayed_ts.append(t)
+    delayed_ts.sort()
+
+    rows = []
+    i, n = 0, len(evs)
+    while i < n:
+        ts, ev = evs[i]
+        state = ev.split("\t")[1] if "\t" in ev else ev
+        if "[40]STOPPING" in state or "[70]STOPPED" in state:
+            j, end = i + 1, None
+            while j < n:
+                if "[20]RUNNING" in evs[j][1]:
+                    end = evs[j][0]
+                    break
+                j += 1
+            if end is None:
+                break
+            code = _parse_stop_code(ev)
+            dur = int((end - ts).total_seconds())
+            if code == _ERROR_STOP_CODE:
+                rows.append({"date": ts.normalize(), "category": "error_stop",
+                             "recovery_seconds": dur})
+            elif code == _CONSOLE_STOP_CODE:
+                linked = any(0 <= (ts - d).total_seconds() <= _DELAYED_STOP_WINDOW_S
+                             for d in delayed_ts)
+                if linked:
+                    rows.append({"date": ts.normalize(), "category": "manual_delayed",
+                                 "recovery_seconds": dur})
+            i = j + 1
+        else:
+            i += 1
+
+    if not rows:
+        return pd.DataFrame(columns=["date", "category", "recovery_seconds"])
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=300)

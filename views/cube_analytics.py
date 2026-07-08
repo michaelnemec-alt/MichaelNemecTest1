@@ -14,6 +14,7 @@ from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_robot_state, query_bin_presentations,
     query_port_wait_time_daily, query_port_uptime, query_incidents, query_robot_errors,
+    query_recovery_times,
 )
 
 SITE_COLORS = [
@@ -54,6 +55,10 @@ METRIC_INFO = {
     "Errors caused by Facility %": "Percentage of total robot errors caused by facility/technical problems (is_bin_quality=False). These are mechanical or infrastructure issues requiring maintenance or engineering intervention.",
     "Errors caused by Operations": "Count of robot errors caused by operations problems (is_bin_quality=True and is_port=False). Bin handling issues.",
     "Errors caused by Facility": "Count of robot errors caused by facility/technical problems (is_bin_quality=False). Mechanical or infrastructure issues.",
+    "Time to Recover - Error Stop": "Median minutes to get the system RUNNING again after it was force-stopped by a robot error (event-log stop code XHANDLER_ROBOT_ERROR_FAILED -> next RUNNING). This is a human-response metric: how fast operators recover a hard stop. Lower is better.",
+    "Time to Recover - Manual/Delayed Stop": "Median minutes for the stop-fix-restart cycle when the system tolerated an error (delayed stop) but kept running, then an operator manually stopped it (STOPPED_FROM_CONSOLE within 35 min of the delayed-stop error) to fix it and restarted. A human-response metric. Lower is better.",
+    "Recovery Events - Error Stop": "Number of times the system was force-stopped by a robot error and had to be recovered, per period.",
+    "Recovery Events - Manual/Delayed Stop": "Number of delayed-stop-linked manual stop/fix/restart cycles per period.",
 }
 
 
@@ -619,6 +624,76 @@ def _aggregate_pivot_sum(df, value_col, agg_mode):
     return pivot
 
 
+def _aggregate_recovery(df, category, agg_mode, how):
+    """Aggregate event-level recovery rows into a site x period pivot.
+
+    how='median' -> median recovery time in minutes; how='count' -> number of events.
+    """
+    df = df[df["category"] == category].copy()
+    if df.empty:
+        return pd.DataFrame()
+    if agg_mode == "Week":
+        df["period"] = df["date"].dt.to_period("W").dt.start_time
+    elif agg_mode == "Month":
+        df["period"] = df["date"].dt.to_period("M").dt.start_time
+    else:
+        df["period"] = df["date"]
+    if agg_mode in ("Week", "Month"):
+        df = df[df["period"] < _current_period_start(agg_mode)]
+    if df.empty:
+        return pd.DataFrame()
+    if how == "median":
+        grouped = df.groupby(["site", "period"])["recovery_seconds"].median().reset_index()
+        grouped["recovery_seconds"] = grouped["recovery_seconds"] / 60.0
+    else:
+        grouped = df.groupby(["site", "period"])["recovery_seconds"].count().reset_index()
+    pivot = grouped.pivot(index="period", columns="site", values="recovery_seconds").sort_index()
+    if agg_mode == "Week":
+        pivot.index = pivot.index.strftime("W%V %Y")
+    elif agg_mode == "Month":
+        pivot.index = pivot.index.strftime("%Y-%m")
+    else:
+        pivot.index = pivot.index.strftime("%Y-%m-%d")
+    return pivot
+
+
+_RECOVERY_META = {
+    "recover_error": {
+        "category": "error_stop",
+        "caption": "System was force-stopped by a robot error (stop code XHANDLER_ROBOT_ERROR_FAILED). "
+                   "Recovery = minutes from STOPPED to RUNNING again (median per period).",
+        "time_title": "Time to Recover - Error Stop",
+        "count_title": "Recovery Events - Error Stop",
+    },
+    "recover_manual": {
+        "category": "manual_delayed",
+        "caption": "System tolerated an error and kept running, then an operator manually stopped it "
+                   "(within 35 min of the delayed-stop error) to fix it. Recovery = minutes from STOPPED to RUNNING (median).",
+        "time_title": "Time to Recover - Manual/Delayed Stop",
+        "count_title": "Recovery Events - Manual/Delayed Stop",
+    },
+}
+
+
+def _render_recovery_metric(metric_choice, date_from_str, date_to_str, aggregation):
+    meta = _RECOVERY_META[metric_choice]
+    with st.spinner("Loading recovery (event-log) data — this is heavier, please wait..."):
+        df_recovery = _load_for_sites(query_recovery_times, date_from_str, date_to_str)
+    st.caption(meta["caption"])
+    if df_recovery.empty:
+        st.warning("No recovery events found for the selected range.")
+        return
+    pivot = _aggregate_recovery(df_recovery, meta["category"], aggregation, "median")
+    _chart_title_with_info(meta["time_title"])
+    if pivot.empty:
+        st.info("No matching recovery events in this range.")
+        return
+    st.plotly_chart(_make_trend_chart(pivot, meta["time_title"], "Minutes"), use_container_width=True)
+    pivot_n = _aggregate_recovery(df_recovery, meta["category"], aggregation, "count")
+    _chart_title_with_info(meta["count_title"])
+    st.plotly_chart(_make_trend_chart(pivot_n, meta["count_title"], "Count"), use_container_width=True)
+
+
 def _view_health_index(date_from_str, date_to_str, aggregation):
     HEALTH_TABS = ["Health Overview", "Facility vs Ops Overview"]
     health_tab = st.segmented_control(
@@ -652,15 +727,20 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
         st.divider()
         metric_choice = st.selectbox(
             "Explore other metric",
-            ["uptime", "wait_bin", "waste_time", "average_battery_score", "packet_loss", "mtbf_h", "mbbd"],
+            ["uptime", "wait_bin", "waste_time", "average_battery_score", "packet_loss", "mtbf_h", "mbbd",
+             "recover_error", "recover_manual"],
             format_func=lambda k: {
                 "uptime": "Uptime %", "wait_bin": "Wait Bin (s)", "waste_time": "Waste Time (s)",
                 "average_battery_score": "Battery Score", "packet_loss": "Packet Loss %",
                 "mtbf_h": "MTBF (h)", "mbbd": "MBBD",
+                "recover_error": "Time to Recover – Error Stop (min)",
+                "recover_manual": "Time to Recover – Manual/Delayed Stop (min)",
             }.get(k, k),
             key="cube_explore_metric",
         )
-        if metric_choice in df_health.columns:
+        if metric_choice in ("recover_error", "recover_manual"):
+            _render_recovery_metric(metric_choice, date_from_str, date_to_str, aggregation)
+        elif metric_choice in df_health.columns:
             pct = metric_choice in ("uptime", "packet_loss")
             pivot = _aggregate_pivot(df_health, metric_choice, aggregation)
             st.plotly_chart(_make_trend_chart(pivot, metric_choice.replace("_", " ").title(), metric_choice, pct=pct), use_container_width=True)
