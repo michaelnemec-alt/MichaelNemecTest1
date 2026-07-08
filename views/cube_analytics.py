@@ -78,22 +78,38 @@ def _chart_title_with_info(title):
     )
 
 
+def _hex_to_rgba(hex_color, alpha):
+    hex_color = hex_color.lstrip("#")
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=None, pct=False):
     fig = go.Figure()
     sites = pivot_df.columns.tolist()
     site_means = {s: pivot_df[s].mean() for s in sites}
     sorted_sites = sorted(sites, key=lambda s: site_means.get(s, 0), reverse=True)
     color_map = {site: SITE_COLORS[i % len(SITE_COLORS)] for i, site in enumerate(sites)}
+    highlight = st.session_state.get("cube_highlight", "All sites")
+    has_highlight = highlight and highlight != "All sites" and highlight in sites
     for site in sorted_sites:
         color = color_map[site]
         vals = pivot_df[site]
         short_name = site.split("-", 1)[-1] if "-" in site else site
         hover_fmt = "%{y:.2f}%" if pct else "%{y:.2f}"
+        if has_highlight and site != highlight:
+            line_color = _hex_to_rgba(color, 0.15)
+            line_width = 1.5
+            marker = dict(size=3, color=_hex_to_rgba(color, 0.15))
+        else:
+            line_color = color
+            line_width = 3 if has_highlight else 2
+            marker = dict(size=5 if has_highlight else 4, color=color)
         fig.add_trace(go.Scatter(
             x=pivot_df.index, y=vals,
             mode="lines+markers", name=short_name,
-            line=dict(color=color, width=2),
-            marker=dict(size=4),
+            line=dict(color=line_color, width=line_width),
+            marker=marker,
             hovertemplate=short_name + ": " + hover_fmt + "<extra></extra>",
         ))
     if threshold is not None:
@@ -246,6 +262,20 @@ def render(selected_view="Overview & Health"):
 
         st.divider()
         aggregation = st.radio("Aggregation", ["Day", "Week", "Month"], index=1, horizontal=True, key="cube_agg")
+
+        try:
+            site_names = sorted(inst["name"] for inst in get_installations())
+        except Exception:
+            site_names = []
+        highlight_options = ["All sites"] + site_names
+        st.selectbox(
+            "Highlight site",
+            highlight_options,
+            index=0,
+            key="cube_highlight",
+            format_func=lambda s: s if s == "All sites" else (s.split("-", 1)[-1] if "-" in s else s),
+            help="Keep one site solid and fully coloured while the others fade into the background, so you can see how it compares to the rest without hiding them.",
+        )
 
     if not dt_from or not dt_to:
         st.info("Select both start and end dates.")
