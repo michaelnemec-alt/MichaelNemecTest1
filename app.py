@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import logging
 import time
 
@@ -133,71 +132,3 @@ elif selected == "CUBE Analytics *":
     render(cube_view or "Overview & Health")
 
 st.markdown("<div class='footer'>Created by <b>Michael Nemec</b></div>", unsafe_allow_html=True)
-
-
-def _inject_robot_rider_runner():
-    """Replace Streamlit's default running-man status icon with an animated
-    person riding the AutoStore robot (wheels spin, rider bobs, arm swings).
-    Keeps the 'RUNNING...' text untouched."""
-    svg = (
-        '<svg class="robot-rider" viewBox="0 0 48 30" xmlns="http://www.w3.org/2000/svg">'
-        # rider (bobs), sitting on top of the robot
-        '<g class="rr-rider">'
-        '<circle cx="24" cy="4" r="2.2" fill="#1F3864"/>'
-        '<path d="M24 6.2 L23 11" stroke="#1F3864" stroke-width="1.8" stroke-linecap="round"/>'
-        '<path d="M23 11 L27 11 L29 14" stroke="#1F3864" stroke-width="1.8" stroke-linecap="round" fill="none"/>'
-        '<line class="rr-arm" x1="23.5" y1="7" x2="28.5" y2="9" stroke="#C5B200" stroke-width="1.8" stroke-linecap="round"/>'
-        '</g>'
-        # robot body + overhang bar + left mast
-        '<rect x="9" y="12" width="22" height="8" rx="1.6" fill="#5B9BD5"/>'
-        '<rect x="7" y="10" width="26" height="2.6" rx="1.3" fill="#1F3864"/>'
-        '<rect x="7" y="5.5" width="2.4" height="5" rx="1" fill="#1F3864"/>'
-        # wheels (spin)
-        '<g class="rr-wheel"><circle cx="14" cy="22.5" r="3.4" fill="#2E2E2E"/>'
-        '<circle cx="14" cy="22.5" r="1.2" fill="#e8edf3"/>'
-        '<line x1="14" y1="19.4" x2="14" y2="25.6" stroke="#e8edf3" stroke-width="0.7"/></g>'
-        '<g class="rr-wheel rr-wheel2"><circle cx="26" cy="22.5" r="3.4" fill="#2E2E2E"/>'
-        '<circle cx="26" cy="22.5" r="1.2" fill="#e8edf3"/>'
-        '<line x1="26" y1="19.4" x2="26" y2="25.6" stroke="#e8edf3" stroke-width="0.7"/></g>'
-        '</svg>'
-    )
-    components.html(
-        """
-<script>
-try {
-const doc = window.parent.document;
-const STYLE_ID = "robot-rider-style";
-if (!doc.getElementById(STYLE_ID)) {
-  const s = doc.createElement("style");
-  s.id = STYLE_ID;
-  s.textContent = `
-    [data-testid="stStatusWidget"] svg:not(.robot-rider),
-    [data-testid="stStatusWidget"] i { display:none !important; }
-    .robot-rider { width:34px; height:22px; margin-right:4px; flex:0 0 auto; }
-    .rr-wheel { transform-box: fill-box; transform-origin: center; animation: rr-spin 0.65s linear infinite; }
-    .rr-wheel2 { animation-delay: -0.15s; }
-    .rr-rider { transform-box: fill-box; transform-origin: 24px 12px; animation: rr-bob 0.6s ease-in-out infinite; }
-    .rr-arm { transform-box: fill-box; transform-origin: 23.5px 7px; animation: rr-arm 0.6s ease-in-out infinite; }
-    @keyframes rr-spin { to { transform: rotate(360deg); } }
-    @keyframes rr-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-1.7px); } }
-    @keyframes rr-arm { 0%,100% { transform: rotate(-20deg); } 50% { transform: rotate(16deg); } }
-  `;
-  doc.head.appendChild(s);
-}
-const SVG = `%SVG%`;
-function inject() {
-  const w = doc.querySelector('[data-testid="stStatusWidget"]');
-  if (w && !w.querySelector('.robot-rider')) {
-    w.insertAdjacentHTML('afterbegin', SVG);
-  }
-}
-setInterval(inject, 250);
-inject();
-} catch (e) { /* sandbox may block parent access; leave default icon */ }
-</script>
-""".replace("%SVG%", svg),
-        height=0,
-    )
-
-
-_inject_robot_rider_runner()
