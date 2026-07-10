@@ -321,7 +321,7 @@ def render(selected_view="Overview & Health"):
     try:
         if selected_view == "Overview & Health":
             _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to)
-        elif selected_view == "Error & Health Metrics":
+        elif selected_view in ("Error & Health Metrics", "Uptime metrics"):
             _view_error_health(date_from_str, date_to_str, aggregation)
         elif selected_view == "Performance":
             _view_performance(date_from_str, date_to_str, aggregation)

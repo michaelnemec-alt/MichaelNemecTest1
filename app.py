@@ -48,7 +48,7 @@ st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-
 PAGES = ["Home", "Reporting & Data Tools *", "System KPI overview *", "Facility Performance KPI *", "AutoStore system *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
 SYSTEM_KPI_VIEWS = ["Overview & Health", "Error & Health Metrics *"]
-ERROR_HEALTH_VIEWS = ["Error & Health Metrics", "Robots", "Ports", "Chargers", "System"]
+ERROR_HEALTH_VIEWS = ["Uptime metrics", "Robots", "Ports", "Chargers", "System"]
 FACILITY_VIEWS = ["Time to Recover", "Reliability", "Incidents"]
 AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
 
@@ -90,10 +90,10 @@ if selected == "System KPI overview *":
         error_health_view = st.segmented_control(
             "error_health_nav",
             options=ERROR_HEALTH_VIEWS,
-            default="Error & Health Metrics",
+            default="Uptime metrics",
             key="error_health_nav_selection",
             label_visibility="collapsed",
-        ) or "Error & Health Metrics"
+        ) or "Uptime metrics"
 
 if selected == "Facility Performance KPI *":
     facility_view = st.segmented_control(
@@ -177,7 +177,7 @@ elif selected == "System KPI overview *":
         render("Overview & Health")
     else:
         logger.info("Rendering Error & Health sub-view: %s", error_health_view)
-        render(error_health_view or "Error & Health Metrics")
+        render(error_health_view or "Uptime metrics")
 
 elif selected == "Facility Performance KPI *":
     from views.cube_analytics import render
