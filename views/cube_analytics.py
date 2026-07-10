@@ -406,6 +406,7 @@ PERF_TARGET_WASTE = 0.1
 PERF_TARGET_USERWAIT = 2.0
 PERF_TARGET_REUSE = 6.0
 PERF_TARGET_OUTSIDE = 1.0  # % of bins outside the grid; lower is better
+PERF_CONSOLIDATION_WAIT = 5.0  # bin-wait (s) that fully excuses low picks/bin (robotic-pick consolidation)
 
 
 def _scoped_user_wait(df_pwt):
@@ -450,11 +451,7 @@ def _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits, df_out
         )
         frames.append(d)
     if not df_usage.empty and "picks_per_bin" in df_usage.columns:
-        u = df_usage[["site", "date", "picks_per_bin"]].copy()
-        u["reuse_score"] = u["picks_per_bin"].apply(
-            lambda v: float("nan") if pd.isna(v) else min(v / PERF_TARGET_REUSE * 100, 100)
-        )
-        frames.append(u)
+        frames.append(df_usage[["site", "date", "picks_per_bin"]].copy())
     if not df_health.empty and "waste_time" in df_health.columns:
         w = df_health[["site", "date", "waste_time"]].copy()
         w["waste_score"] = w["waste_time"].apply(
@@ -484,6 +481,20 @@ def _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits, df_out
         return ws * min(PERF_TARGET_USERWAIT / uw, 1.0)
 
     merged["flow_score"] = merged.apply(_flow, axis=1)
+
+    if "picks_per_bin" in merged.columns:
+        def _reuse(row):
+            v = row.get("picks_per_bin")
+            if pd.isna(v):
+                return float("nan")
+            raw = min(v / PERF_TARGET_REUSE * 100, 100)
+            uw = row.get("user_wait")
+            if pd.notna(uw) and uw > 0:
+                credit = min(uw / PERF_CONSOLIDATION_WAIT * 100, 100)
+                return max(raw, credit)
+            return raw
+        merged["reuse_score"] = merged.apply(_reuse, axis=1)
+
     cfg_cols = [c for c in ["digging_score", "reuse_score"] if c in merged.columns]
     if cfg_cols:
         merged["config_score"] = merged[cfg_cols].mean(axis=1)
@@ -640,7 +651,8 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
         "excused when the system is busy (working% ≥ 60), penalised when it is not. "
         "Bin wait is scoped to picks / category 1 & 2. "
         "② Waste time (system-level) vs 0.1s target. "
-        "③ Config quality: mean of digging depth (target 1) and bin reuse (picks/bin vs 6). "
+        "③ Config quality: mean of digging depth (target 1) and bin reuse (picks/bin vs 6); "
+        "low picks/bin is excused when Bin Wait is high (robotic-pick consolidation — more products per bin). "
         "④ Bins outside: share of bins outside the grid vs < 1% target. "
         "This composite feeds the Performance term of OEE.",
     )
