@@ -405,6 +405,7 @@ PERF_TARGET_ROBOT_WORKING = 60.0
 PERF_TARGET_WASTE = 0.1
 PERF_TARGET_USERWAIT = 2.0
 PERF_TARGET_REUSE = 6.0
+PERF_TARGET_OUTSIDE = 1.0  # % of bins outside the grid; lower is better
 
 
 def _scoped_user_wait(df_pwt):
@@ -422,8 +423,8 @@ def _scoped_user_wait(df_pwt):
     return g[["site", "date", "user_wait"]]
 
 
-def _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits):
-    """Per (site, date) Performance KPI = mean of three interaction-aware sub-scores.
+def _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits, df_outside=None):
+    """Per (site, date) Performance KPI = mean of four sub-scores.
 
     ① Utilisation-adjusted flow (robot working% ↔ user wait, picks/cat 1&2):
        working_score = min(working_pct / 60 × 100, 100).
@@ -432,6 +433,7 @@ def _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits):
     ② Waste time (system-level): min(0.1 / waste_time × 100, 100).
     ③ Config quality = mean of digging score min(1.0 / depth × 100, 100)
        and reuse score min(picks_per_bin / 6.0 × 100, 100).
+    ④ Bins outside: min(1.0 / bins_outside_pct × 100, 100), target < 1%.
     """
     frames = []
     if not df_robot.empty and "working_pct" in df_robot.columns:
@@ -464,6 +466,11 @@ def _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits):
     merged = frames[0]
     for f in frames[1:]:
         merged = merged.merge(f, on=["site", "date"], how="outer")
+    if df_outside is not None and not df_outside.empty and "bins_outside_pct" in df_outside.columns:
+        merged = merged.merge(df_outside[["site", "bins_outside_pct"]], on="site", how="left")
+        merged["outside_score"] = merged["bins_outside_pct"].apply(
+            lambda v: float("nan") if pd.isna(v) else (100.0 if v <= 0 else min(PERF_TARGET_OUTSIDE / v * 100, 100))
+        )
 
     def _flow(row):
         ws = row.get("working_score")
@@ -480,7 +487,7 @@ def _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits):
     cfg_cols = [c for c in ["digging_score", "reuse_score"] if c in merged.columns]
     if cfg_cols:
         merged["config_score"] = merged[cfg_cols].mean(axis=1)
-    score_cols = [c for c in ["flow_score", "waste_score", "config_score"] if c in merged.columns]
+    score_cols = [c for c in ["flow_score", "waste_score", "config_score", "outside_score"] if c in merged.columns]
     merged["performance_pct"] = merged[score_cols].mean(axis=1)
     return merged
 
@@ -590,13 +597,17 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
             f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
             f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
             f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
+            f_inst = pool.submit(_load_for_sites, query_installation_data, date_from_str, date_to_str)
         df_robot = f_robot.result()
         df_health = f_health.result()
         df_dig = f_dig.result()
         df_usage = f_usage.result()
         df_waits = _scoped_user_wait(f_pwt.result())
+        df_inst = f_inst.result()
+        df_outside = _compute_bins_outside(df_inst)
+        df_outside_ts = _bins_outside_timeseries(df_inst)
 
-    perf = _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits)
+    perf = _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits, df_outside)
     if perf.empty:
         st.warning("No data returned for the selected date range.")
         return
@@ -613,6 +624,7 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
         "avg_digging_depth": "Digging Depth",
         "picks_per_bin": "Picks/Bin",
         "waste_time": "Waste Time (s)",
+        "bins_outside_pct": "Bins Outside %",
         "performance_pct": "Performance KPI %",
     }
     present = [c for c in label_map if c in period_df.columns]
@@ -623,24 +635,27 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
 
     _title_with_info(
         "Performance KPI — All Sites",
-        "Performance KPI = mean of three interaction-aware sub-scores. "
+        "Performance KPI = mean of four sub-scores. "
         "① Utilisation-adjusted flow: robot working% (target 60%); high user wait is "
         "excused when the system is busy (working% ≥ 60), penalised when it is not. "
         "User wait is scoped to picks / category 1 & 2. "
         "② Waste time (system-level) vs 0.1s target. "
         "③ Config quality: mean of digging depth (target 1) and bin reuse (picks/bin vs 6). "
+        "④ Bins outside: share of bins outside the grid vs < 1% target. "
         "This composite feeds the Performance term of OEE.",
     )
-    _render_colored_table(
-        latest,
-        num_cols=list(label_map.values()),
-        color_funcs={"Performance KPI %": _color_availability},
-    )
-    st.caption(f"Period: {period_label}")
-
-    pivot = _aggregate_pivot(perf, "performance_pct", aggregation)
-    _chart_title_with_info("Performance KPI")
-    st.plotly_chart(_make_trend_chart(pivot, "Performance KPI", "Performance %", pct=True), use_container_width=True)
+    col_tbl, col_chart = st.columns([2, 5], gap="small")
+    with col_tbl:
+        _render_colored_table(
+            latest,
+            num_cols=list(label_map.values()),
+            color_funcs={"Performance KPI %": _color_availability},
+        )
+        st.caption(f"Period: {period_label}")
+    with col_chart:
+        pivot = _aggregate_pivot(perf, "performance_pct", aggregation)
+        _chart_title_with_info("Performance KPI")
+        st.plotly_chart(_make_trend_chart(pivot, "Performance KPI", "Performance %", pct=True), use_container_width=True)
 
     if "robot_working_pct" in perf.columns:
         pivot = _aggregate_pivot(perf, "robot_working_pct", aggregation)
@@ -689,6 +704,15 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
             "Read together with digging depth: good config = low digging + high reuse.",
         )
         st.plotly_chart(_make_trend_chart(pivot, "Bin Usage Efficiency (picks per bin, cat 1 & 2)", "Picks / bin"), use_container_width=True)
+
+    if not df_outside_ts.empty and "bins_outside_pct" in df_outside_ts.columns:
+        pivot = _aggregate_pivot(df_outside_ts, "bins_outside_pct", aggregation)
+        _chart_title_with_info(
+            "Bins Outside %",
+            "Share of bins located outside the grid (type 'outside') ÷ all bins, from the "
+            "installation-data snapshot. Target < 1%. Lower is better. Feeds the Performance KPI.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "Bins Outside %", "Bins outside %", threshold=1.0, threshold_label="Target < 1%"), use_container_width=True)
 
     st.divider()
     csv_bytes = perf.to_csv(index=False).encode("utf-8")
@@ -1115,7 +1139,7 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
 
 def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     with st.spinner("Loading OEE inputs..."):
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        with ThreadPoolExecutor(max_workers=10) as pool:
             f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
             f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
@@ -1125,6 +1149,7 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
             f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
             f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
             f_ver = pool.submit(_load_for_sites, query_module_versions, date_from_str, date_to_str)
+            f_inst = pool.submit(_load_for_sites, query_installation_data, date_from_str, date_to_str)
         df_uptime = f_uptime.result()
         df_port = f_port.result()
         df_robot = f_robot.result()
@@ -1134,6 +1159,7 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         df_usage = f_usage.result()
         df_waits = _scoped_user_wait(f_pwt.result())
         df_ver = f_ver.result()
+        df_outside = _compute_bins_outside(f_inst.result())
 
     if df_uptime.empty or df_robot.empty:
         st.warning("No data returned for the selected date range.")
@@ -1144,7 +1170,7 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         st.warning("Not enough data to compute Availability.")
         return
 
-    pf = _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits)
+    pf = _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits, df_outside)
     if pf.empty:
         st.warning("Not enough data to compute Performance.")
         return
@@ -1203,8 +1229,8 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         "Availability = composite Availability KPI (weighted mean: System 40% / Port 25% / "
         "Robot 25% / Software 10%, see Availability KPI tab). Performance = composite Performance KPI (mean of three "
         "interaction sub-scores: utilisation-adjusted flow [robot working% vs 60% with user wait "
-        "on picks/cat 1&2 excused when busy], waste time vs 0.1s, and config quality [digging vs 1 + "
-        "bin reuse vs 6]; see Performance KPI tab). "
+        "on picks/cat 1&2 excused when busy], waste time vs 0.1s, config quality [digging vs 1 + "
+        "bin reuse vs 6], and bins outside vs < 1%; see Performance KPI tab). "
         "Quality = share of stops that were NOT error-forced (uptime "
         "stop codes); days with no stops count as 100%. Proxies pending official AutoStore targets.",
     )
@@ -1627,6 +1653,38 @@ def _compute_software(df_versions):
                 tally[s][0] += 1
     rows = [{"site": s, "software_pct": (up / tot * 100 if tot else None)} for s, (up, tot) in tally.items()]
     return pd.DataFrame(rows)
+
+
+def _compute_bins_outside(df_inst):
+    """Per-site share of bins located outside the grid = bins with type 'outside'
+    ÷ all bins × 100, from the latest installation-data snapshot. Lower is better."""
+    if df_inst.empty or "group" not in df_inst.columns:
+        return pd.DataFrame(columns=["site", "bins_outside_pct"])
+    df_bin = df_inst[df_inst["group"] == "bin"].copy()
+    if df_bin.empty:
+        return pd.DataFrame(columns=["site", "bins_outside_pct"])
+    latest = df_bin.loc[df_bin.groupby("site")["date"].transform("max") == df_bin["date"]]
+    rows = []
+    for site, grp in latest.groupby("site"):
+        total = grp["count"].sum()
+        outside = grp.loc[grp["type"] == "outside", "count"].sum()
+        rows.append({"site": site, "bins_outside_pct": (outside / total * 100 if total else None)})
+    return pd.DataFrame(rows)
+
+
+def _bins_outside_timeseries(df_inst):
+    """Per (site, date) share of bins outside the grid, for trend charting."""
+    if df_inst.empty or "group" not in df_inst.columns:
+        return pd.DataFrame(columns=["site", "date", "bins_outside_pct"])
+    db = df_inst[df_inst["group"] == "bin"].copy()
+    if db.empty:
+        return pd.DataFrame(columns=["site", "date", "bins_outside_pct"])
+    total = db.groupby(["site", "date"])["count"].sum().rename("total")
+    outside = db[db["type"] == "outside"].groupby(["site", "date"])["count"].sum().rename("outside")
+    g = pd.concat([total, outside], axis=1).reset_index()
+    g["outside"] = g["outside"].fillna(0)
+    g["bins_outside_pct"] = g["outside"] / g["total"].where(g["total"] != 0) * 100
+    return g[["site", "date", "bins_outside_pct"]]
 
 
 def _render_version_table(table):
