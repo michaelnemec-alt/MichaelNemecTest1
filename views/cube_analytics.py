@@ -355,12 +355,14 @@ def render(selected_view="Overview & Health"):
         st.error(f"Error loading view: {e}")
 
 
-def _compute_availability(df_uptime, df_port, df_robot):
-    """Per (site, date) System/Port/Robot uptime % and their mean = Availability KPI.
+def _compute_availability(df_uptime, df_port, df_robot, df_versions=None):
+    """Per (site, date) System/Port/Robot/Software % and their mean = Availability KPI.
 
     - System uptime % = uptime recovery_up_ratio × 100
     - Port uptime %   = port-uptime uptime_pct
     - Robot uptime %  = 100 − robot recovery/unavailable/service states
+    - Software %      = share of the site's modules that run the fleet-latest version
+                        (per-site snapshot, broadcast across all dates)
     """
     frames = []
     if not df_uptime.empty and "recovery_up_ratio" in df_uptime.columns:
@@ -380,7 +382,11 @@ def _compute_availability(df_uptime, df_port, df_robot):
     merged = frames[0]
     for f in frames[1:]:
         merged = merged.merge(f, on=["site", "date"], how="outer")
-    comp = [c for c in ["system_uptime_pct", "port_uptime_pct", "robot_uptime_pct"] if c in merged.columns]
+    if df_versions is not None and not df_versions.empty:
+        sw = _compute_software(df_versions)
+        if not sw.empty:
+            merged = merged.merge(sw, on="site", how="left")
+    comp = [c for c in ["system_uptime_pct", "port_uptime_pct", "robot_uptime_pct", "software_pct"] if c in merged.columns]
     merged["availability_pct"] = merged[comp].mean(axis=1)
     return merged
 
@@ -486,15 +492,17 @@ def _period_window(aggregation):
 
 def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     with st.spinner("Loading availability..."):
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
             f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
+            f_ver = pool.submit(_load_for_sites, query_module_versions, date_from_str, date_to_str)
         df_uptime = f_uptime.result()
         df_port = f_port.result()
         df_robot = f_robot.result()
+        df_ver = f_ver.result()
 
-    avail = _compute_availability(df_uptime, df_port, df_robot)
+    avail = _compute_availability(df_uptime, df_port, df_robot, df_ver)
     if avail.empty:
         st.warning("No data returned for the selected date range.")
         return
@@ -509,6 +517,7 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         "system_uptime_pct": "System %",
         "port_uptime_pct": "Port %",
         "robot_uptime_pct": "Robot %",
+        "software_pct": "Software %",
         "availability_pct": "Availability KPI %",
     }
     present = [c for c in label_map if c in period_df.columns]
@@ -519,9 +528,10 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
 
     _title_with_info(
         "Availability KPI — All Sites",
-        "Availability KPI = mean of System uptime %, Port uptime %, Robot uptime %. "
+        "Availability KPI = mean of System uptime %, Port uptime %, Robot uptime %, Software %. "
         "System = running time ÷ total (uptime endpoint, recovery-adjusted). "
         "Port = port operational %. Robot = 100 − robot recovery/unavailable/service time. "
+        "Software = share of the site's modules running the fleet-latest version. "
         "This composite feeds the Availability term of OEE.",
     )
     _render_colored_table(
@@ -544,6 +554,16 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
             pivot = _aggregate_pivot(avail, col, aggregation)
             _chart_title_with_info(title)
             st.plotly_chart(_make_trend_chart(pivot, title, "Uptime %", pct=True), use_container_width=True)
+
+    if "software_pct" in avail.columns:
+        pivot = _aggregate_pivot(avail, "software_pct", aggregation)
+        _chart_title_with_info(
+            "Software Up-to-date %",
+            "Share of each site's modules running the fleet-latest version "
+            "(latest snapshot; see AutoStore system → Versions of Systems). "
+            "Feeds the Availability KPI.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "Software Up-to-date %", "Up-to-date %", pct=True), use_container_width=True)
 
     st.divider()
     csv_bytes = avail.to_csv(index=False).encode("utf-8")
@@ -1092,6 +1112,7 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
             f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
             f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
             f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
+            f_ver = pool.submit(_load_for_sites, query_module_versions, date_from_str, date_to_str)
         df_uptime = f_uptime.result()
         df_port = f_port.result()
         df_robot = f_robot.result()
@@ -1100,12 +1121,13 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         df_dig = f_dig.result()
         df_usage = f_usage.result()
         df_waits = _scoped_user_wait(f_pwt.result())
+        df_ver = f_ver.result()
 
     if df_uptime.empty or df_robot.empty:
         st.warning("No data returned for the selected date range.")
         return
 
-    av = _compute_availability(df_uptime, df_port, df_robot)
+    av = _compute_availability(df_uptime, df_port, df_robot, df_ver)
     if av.empty:
         st.warning("Not enough data to compute Availability.")
         return
@@ -1166,8 +1188,8 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     _title_with_info(
         "OEE — All Sites",
         "OEE = Availability × Performance × Quality, per site. "
-        "Availability = composite Availability KPI (mean of System/Port/Robot uptime, "
-        "see Availability KPI tab). Performance = composite Performance KPI (mean of three "
+        "Availability = composite Availability KPI (mean of System/Port/Robot uptime + "
+        "Software up-to-date %, see Availability KPI tab). Performance = composite Performance KPI (mean of three "
         "interaction sub-scores: utilisation-adjusted flow [robot working% vs 60% with user wait "
         "on picks/cat 1&2 excused when busy], waste time vs 0.1s, and config quality [digging vs 1 + "
         "bin reuse vs 6]; see Performance KPI tab). "
@@ -1566,6 +1588,31 @@ def _version_key(value):
     """Comparable key for a version string (ignores trailing '*' / non-digits)."""
     parts = re.findall(r"\d+", str(value))
     return tuple(int(p) for p in parts)
+
+
+def _compute_software(df_versions):
+    """Per-site software score = % of the site's modules running the fleet-latest
+    version. For each module the newest version any site runs is the reference; a
+    site scores 1 point for a module it runs at that version, 0 if behind. Score =
+    up-to-date modules ÷ modules the site runs × 100. Uses the latest snapshot."""
+    if df_versions.empty or "module" not in df_versions.columns:
+        return pd.DataFrame(columns=["site", "software_pct"])
+    latest = df_versions.loc[df_versions.groupby("site")["date"].transform("max") == df_versions["date"]]
+    table = latest.pivot_table(index="module", columns="site", values="version", aggfunc="first")
+    sites = list(table.columns)
+    tally = {s: [0, 0] for s in sites}  # [up_to_date, total]
+    for _, row in table.iterrows():
+        keys = {s: _version_key(row[s]) for s in sites
+                if pd.notna(row[s]) and str(row[s]) not in ("", "—") and _version_key(row[s])}
+        if not keys:
+            continue
+        max_key = max(keys.values())
+        for s, k in keys.items():
+            tally[s][1] += 1
+            if k == max_key:
+                tally[s][0] += 1
+    rows = [{"site": s, "software_pct": (up / tot * 100 if tot else None)} for s, (up, tot) in tally.items()]
+    return pd.DataFrame(rows)
 
 
 def _render_version_table(table):

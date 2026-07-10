@@ -45,8 +45,8 @@ section[data-testid="stSidebar"] button {
 st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>", unsafe_allow_html=True)
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
-PAGES = ["Home", "Reporting & Data Tools *", "System OEE *"]
-OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Performance KPI", "Facility KPI *", "AutoStore system *"]
+PAGES = ["Home", "Reporting & Data Tools *", "System OEE *", "AutoStore system *"]
+OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Performance KPI", "Facility KPI *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
 SYSTEM_KPI_VIEWS = ["Availability KPI", "Error & Health Metrics *"]
 ERROR_HEALTH_VIEWS = ["Uptime metrics", "Robots", "Ports", "Chargers", "System"]
@@ -115,14 +115,14 @@ if selected == "System OEE *":
             label_visibility="collapsed",
         ) or "Time to Recover"
 
-    elif oee_view == "AutoStore system *":
-        autostore_view = st.segmented_control(
-            "autostore_nav",
-            options=AUTOSTORE_VIEWS,
-            default="Versions of Systems",
-            key="autostore_nav_selection",
-            label_visibility="collapsed",
-        ) or "Versions of Systems"
+if selected == "AutoStore system *":
+    autostore_view = st.segmented_control(
+        "autostore_nav",
+        options=AUTOSTORE_VIEWS,
+        default="Versions of Systems",
+        key="autostore_nav_selection",
+        label_visibility="collapsed",
+    ) or "Versions of Systems"
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -200,9 +200,10 @@ elif selected == "System OEE *":
         from views.cube_analytics import render
         logger.info("Rendering Facility Performance view: %s", facility_view)
         render(facility_view or "Time to Recover")
-    elif oee_view == "AutoStore system *":
-        from views.cube_analytics import render_autostore
-        logger.info("Rendering AutoStore system view: %s", autostore_view or "Versions of Systems")
-        render_autostore(autostore_view or "Versions of Systems")
+
+elif selected == "AutoStore system *":
+    from views.cube_analytics import render_autostore
+    logger.info("Rendering AutoStore system view: %s", autostore_view or "Versions of Systems")
+    render_autostore(autostore_view or "Versions of Systems")
 
 st.markdown("<div class='footer'>Created by <b>Michael Nemec</b></div>", unsafe_allow_html=True)
