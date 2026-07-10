@@ -930,7 +930,6 @@ def _render_version_table(table):
 
 
 def _view_versions(date_from_str, date_to_str):
-    st.markdown("#### Versions of Systems")
     with st.spinner("Loading module versions..."):
         df = _load_for_sites(query_module_versions, date_from_str, date_to_str)
 
@@ -945,12 +944,13 @@ def _view_versions(date_from_str, date_to_str):
     table.columns = [_short_site(s) for s in table.columns]
     table = table.fillna("—")
 
-    st.caption(
+    _title_with_info(
+        "Versions of Systems",
         "Installed module version per site (modules in rows, sites in columns). "
         "A trailing * marks a module reporting more than one distinct version "
         "across its devices. The API exposes only installed versions, so cells "
         "are highlighted red when a site lags behind the newest version any site "
-        "in the fleet runs for that module."
+        "in the fleet runs for that module.",
     )
     _render_version_table(table)
 
