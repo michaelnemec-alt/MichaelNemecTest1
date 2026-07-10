@@ -319,7 +319,9 @@ def render(selected_view="Overview & Health"):
     date_to_str = str(dt_to)
 
     try:
-        if selected_view == "Overview & Health":
+        if selected_view == "OEE Overview":
+            _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to)
+        elif selected_view == "Overview & Health":
             _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to)
         elif selected_view in ("Error & Health Metrics", "Uptime metrics"):
             _view_error_health(date_from_str, date_to_str, aggregation)
@@ -815,6 +817,115 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
             pivot_false = _aggregate_pivot_sum(df_robot_errors, "error_stopped_false", aggregation)
             _chart_title_with_info("Error Stopped System False")
             st.plotly_chart(_make_trend_chart(pivot_false, "Error Stopped System False", "Count"), use_container_width=True)
+
+
+def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
+    with st.spinner("Loading OEE inputs..."):
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
+            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
+            f_recovery = pool.submit(_load_for_sites, query_recovery_times, date_from_str, date_to_str)
+        df_uptime = f_uptime.result()
+        df_robot = f_robot.result()
+        df_recovery = f_recovery.result()
+
+    if df_uptime.empty or df_robot.empty:
+        st.warning("No data returned for the selected date range.")
+        return
+
+    av = df_uptime[["site", "date", "up_ratio"]].copy()
+    av["availability_pct"] = av["up_ratio"] * 100
+
+    pf = df_robot[["site", "date", "working_pct"]].copy()
+    pf = pf.rename(columns={"working_pct": "performance_pct"})
+
+    if not df_recovery.empty:
+        rec = df_recovery.copy()
+        rec["date"] = pd.to_datetime(rec["date"], errors="coerce").dt.normalize()
+        counts = (
+            rec.groupby(["site", "date", "category"]).size()
+            .unstack(fill_value=0).reset_index()
+        )
+        for c in ("error_stop", "manual"):
+            if c not in counts.columns:
+                counts[c] = 0
+        counts["total_stops"] = counts["error_stop"] + counts["manual"]
+        counts["quality_pct"] = counts.apply(
+            lambda r: (1 - r["error_stop"] / r["total_stops"]) * 100 if r["total_stops"] else 100.0,
+            axis=1,
+        )
+        ql = counts[["site", "date", "quality_pct"]]
+    else:
+        ql = pd.DataFrame(columns=["site", "date", "quality_pct"])
+
+    merged = av[["site", "date", "availability_pct"]].merge(
+        pf[["site", "date", "performance_pct"]], on=["site", "date"], how="outer"
+    ).merge(ql, on=["site", "date"], how="left")
+    merged["quality_pct"] = merged["quality_pct"].fillna(100.0)
+    merged = merged.dropna(subset=["availability_pct", "performance_pct"])
+    if merged.empty:
+        st.warning("Not enough overlapping data to compute OEE.")
+        return
+    merged["oee_pct"] = (
+        merged["availability_pct"] * merged["performance_pct"] * merged["quality_pct"] / 10000.0
+    )
+
+    today = date.today()
+    if aggregation == "Week":
+        period_end = today - timedelta(days=today.isoweekday())
+        period_start = period_end - timedelta(days=6)
+        period_label = f"W{period_start.isocalendar()[1]} ({period_start} — {period_end})"
+    elif aggregation == "Month":
+        first_of_month = today.replace(day=1)
+        period_end = first_of_month - timedelta(days=1)
+        period_start = period_end.replace(day=1)
+        period_label = period_start.strftime("%B %Y")
+    else:
+        period_start = today - timedelta(days=1)
+        period_end = period_start
+        period_label = period_start.strftime("%Y-%m-%d")
+
+    period_df = merged[
+        (merged["date"].dt.date >= period_start) & (merged["date"].dt.date <= period_end)
+    ]
+    if period_df.empty:
+        period_df = merged[merged["date"] == merged["date"].max()]
+        period_label += " (fallback: latest available)"
+
+    cols = ["availability_pct", "performance_pct", "quality_pct", "oee_pct"]
+    latest = period_df.groupby("site")[cols].mean().reset_index()
+    latest.columns = ["Site", "Availability %", "Performance %", "Quality %", "OEE %"]
+    latest["Site"] = latest["Site"].apply(_site_code)
+    latest = latest.sort_values("OEE %", ascending=False).reset_index(drop=True)
+
+    _title_with_info(
+        "OEE — All Sites",
+        "OEE = Availability × Performance × Quality, per site. "
+        "Availability = system running time ÷ total time (uptime endpoint). "
+        "Performance = share of robot-time spent working (robot-state). "
+        "Quality = share of stops that were NOT error-forced (uptime stop codes); "
+        "days with no stops count as 100%. Proxies pending official AutoStore targets.",
+    )
+
+    def _color_oee(val):
+        if pd.isna(val):
+            return ""
+        if val >= 75:
+            return "background-color: #c6efce"
+        if val >= 50:
+            return "background-color: #ffeb9c"
+        return "background-color: #ffc7ce"
+
+    styled = (latest.style
+        .map(_color_oee, subset=["OEE %"])
+        .format({c: "{:.1f}" for c in ["Availability %", "Performance %", "Quality %", "OEE %"]})
+    )
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+    st.caption(f"Period: {period_label}")
+
+    pivot = _aggregate_pivot(merged, "oee_pct", aggregation)
+    _chart_title_with_info("OEE")
+    st.plotly_chart(_make_trend_chart(pivot, "OEE", "OEE %", pct=True), use_container_width=True)
 
 
 def _view_module_robots(date_from_str, date_to_str, aggregation):

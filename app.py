@@ -46,7 +46,7 @@ st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
 PAGES = ["Home", "Reporting & Data Tools *", "System OEE *"]
-OEE_VIEWS = ["System KPI overview *", "Facility Performance KPI *", "AutoStore system *"]
+OEE_VIEWS = ["OEE Overview", "System KPI overview *", "Facility Performance KPI *", "AutoStore system *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
 SYSTEM_KPI_VIEWS = ["Overview & Health", "Error & Health Metrics *"]
 ERROR_HEALTH_VIEWS = ["Uptime metrics", "Robots", "Ports", "Chargers", "System"]
@@ -84,10 +84,10 @@ if selected == "System OEE *":
     oee_view = st.segmented_control(
         "oee_nav",
         options=OEE_VIEWS,
-        default="System KPI overview *",
+        default="OEE Overview",
         key="oee_nav_selection",
         label_visibility="collapsed",
-    ) or "System KPI overview *"
+    ) or "OEE Overview"
 
     if oee_view == "System KPI overview *":
         system_view = st.segmented_control(
@@ -183,7 +183,10 @@ elif selected == "Reporting & Data Tools *":
         render("Performance")
 
 elif selected == "System OEE *":
-    if oee_view == "System KPI overview *":
+    if oee_view == "OEE Overview":
+        from views.cube_analytics import render
+        render("OEE Overview")
+    elif oee_view == "System KPI overview *":
         from views.cube_analytics import render
         if system_view == "Overview & Health":
             render("Overview & Health")
