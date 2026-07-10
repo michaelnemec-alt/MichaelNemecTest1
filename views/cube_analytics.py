@@ -55,10 +55,10 @@ METRIC_INFO = {
     "Errors caused by Facility %": "Percentage of total robot errors caused by facility/technical problems (is_bin_quality=False). These are mechanical or infrastructure issues requiring maintenance or engineering intervention.",
     "Errors caused by Operations": "Count of robot errors caused by operations problems (is_bin_quality=True and is_port=False). Bin handling issues.",
     "Errors caused by Facility": "Count of robot errors caused by facility/technical problems (is_bin_quality=False). Mechanical or infrastructure issues.",
-    "Time to Recover - Error Stop": "Median minutes to get the system RUNNING again after it was force-stopped by a robot error (event-log stop code XHANDLER_ROBOT_ERROR_FAILED -> next RUNNING). This is a human-response metric: how fast operators recover a hard stop. Lower is better.",
-    "Time to Recover - Manual/Delayed Stop": "Median minutes for the stop-fix-restart cycle when the system tolerated an error (delayed stop) but kept running, then an operator manually stopped it (STOPPED_FROM_CONSOLE within 35 min of the delayed-stop error) to fix it and restarted. A human-response metric. Lower is better.",
+    "Time to Recover - Error Stop": "Median minutes the system was down when force-stopped by a robot error (uptime endpoint, stop code XHANDLER_ROBOT_ERROR_FAILED; down_seconds = STOPPED -> RUNNING). This is a human-response metric: how fast operators recover a hard stop. Lower is better.",
+    "Time to Recover - Manual Stop": "Median minutes the system was down when a human stopped it \u2014 an operator console stop (STOPPED_FROM_CONSOLE) or a key switch left disarmed after restart (KEYLOCK_DISARMED). A human-response metric. Lower is better.",
     "Recovery Events - Error Stop": "Number of times the system was force-stopped by a robot error and had to be recovered, per period.",
-    "Recovery Events - Manual/Delayed Stop": "Number of delayed-stop-linked manual stop/fix/restart cycles per period.",
+    "Recovery Events - Manual Stop": "Number of human-initiated (console or key-lock) stop/fix/restart cycles per period.",
 }
 
 
@@ -693,18 +693,19 @@ _RECOVERY_META = {
         "count_title": "Recovery Events - Error Stop",
     },
     "recover_manual": {
-        "category": "manual_delayed",
-        "caption": "System tolerated an error and kept running, then an operator manually stopped it "
-                   "(within 35 min of the delayed-stop error) to fix it. Recovery = minutes from STOPPED to RUNNING (median).",
-        "time_title": "Time to Recover - Manual/Delayed Stop",
-        "count_title": "Recovery Events - Manual/Delayed Stop",
+        "category": "manual",
+        "caption": "System was stopped by a human \u2014 an operator console stop (STOPPED_FROM_CONSOLE) "
+                   "or a key switch left disarmed after restart (KEYLOCK_DISARMED). "
+                   "Recovery = minutes from STOPPED to RUNNING (median per period).",
+        "time_title": "Time to Recover - Manual Stop",
+        "count_title": "Recovery Events - Manual Stop",
     },
 }
 
 
 def _render_recovery_metric(metric_choice, date_from_str, date_to_str, aggregation):
     meta = _RECOVERY_META[metric_choice]
-    with st.spinner("Loading recovery (event-log) data — this is heavier, please wait..."):
+    with st.spinner("Loading recovery data..."):
         df_recovery = _load_for_sites(query_recovery_times, date_from_str, date_to_str)
     st.caption(meta["caption"])
     if df_recovery.empty:
@@ -761,7 +762,7 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
                 "average_battery_score": "Battery Score", "packet_loss": "Packet Loss %",
                 "mtbf_h": "MTBF (h)", "mbbd": "MBBD",
                 "recover_error": "Time to Recover – Error Stop (min)",
-                "recover_manual": "Time to Recover – Manual/Delayed Stop (min)",
+                "recover_manual": "Time to Recover – Manual Stop (min)",
             }.get(k, k),
             key="cube_explore_metric",
         )

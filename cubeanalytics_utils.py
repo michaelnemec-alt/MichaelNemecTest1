@@ -1,6 +1,5 @@
 """CubeAnalytics API helpers."""
 
-import re
 import streamlit as st
 import pandas as pd
 import requests
@@ -323,105 +322,53 @@ def query_robot_errors(installation_id, date_from_str, date_to_str):
     return df
 
 
-# A manual (console) stop is treated as recovery from a tolerated error only when it
-# follows a delayed-stop robot error within this window.
-_DELAYED_STOP_WINDOW_S = 35 * 60
-# Stop code that marks a system that was force-stopped by a robot error.
-_ERROR_STOP_CODE = "XHANDLER_ROBOT_ERROR_FAILED"
-_CONSOLE_STOP_CODE = "STOPPED_FROM_CONSOLE"
-
-
-def _iter_event_log_system_mode(installation_id, params):
-    """Stream the event-log endpoint, yielding only 'System mode' events.
-
-    The event-log is very heavy (~90k events/site/week), most of it robot notify /
-    port / recovery noise. We discard everything except System mode transitions per
-    page so memory stays tiny (~a few hundred rows per month).
-    """
-    url = f"{BASE_URL}/installations/{installation_id}/event-log/"
-    while url:
-        resp = requests.get(url, headers=_headers(), params=params, timeout=120)
-        resp.raise_for_status()
-        data = resp.json()
-        for day_result in data.get("results", []):
-            for e in day_result.get("result", {}).get("event_log", []):
-                if e.get("event", "").startswith("System mode"):
-                    yield e
-        url = data.get("next")
-        params = None
-
-
-def _parse_stop_code(event):
-    parts = event.split("\t")
-    if len(parts) >= 3:
-        return re.sub(r"^\[\d+\]", "", parts[2])
-    return _CONSOLE_STOP_CODE
+# Stop codes grouped into recovery categories.
+_ERROR_STOP_CODES = {"XHANDLER_ROBOT_ERROR_FAILED"}
+# STOPPED_FROM_CONSOLE = operator stopped from the console; KEYLOCK_DISARMED = key
+# switch left off after a restart, auto-stops the system (a human-error stop).
+_MANUAL_STOP_CODES = {"STOPPED_FROM_CONSOLE", "KEYLOCK_DISARMED"}
 
 
 @st.cache_data(ttl=300)
 def query_recovery_times(installation_id, date_from_str, date_to_str):
-    """Reconstruct 'time to recover' events from the event-log.
+    """'Time to recover' events read from the uptime endpoint's downtime periods.
 
     Returns one row per recovery event with columns:
-      date, category ('error_stop' | 'manual_delayed'), recovery_seconds
+      date, category ('error_stop' | 'manual'), recovery_seconds
 
-    - error_stop: system force-stopped by a robot error (stop code
-      XHANDLER_ROBOT_ERROR_FAILED). Recovery = STOPPED -> next RUNNING.
-    - manual_delayed: system tolerated an error (delayed_stop) and kept running,
-      then an operator manually stopped it (STOPPED_FROM_CONSOLE) within the
-      delayed-stop window to fix it. Recovery = STOPPED -> next RUNNING.
+    The uptime endpoint reports every downtime segment with its stop code and the
+    total time the system was down (down_seconds = STOPPED -> RUNNING), so it is a
+    first-party source with no event-log reconstruction needed.
+
+    - error_stop: system force-stopped by a robot error (XHANDLER_ROBOT_ERROR_FAILED).
+    - manual: operator/console stop or a key-lock-disarmed stop (human-initiated).
+
+    recovery_seconds = down_seconds (total time the system was stopped).
     """
+    url = f"{BASE_URL}/installations/{installation_id}/uptime/"
     params = {"after": date_from_str, "before": date_to_str}
-
-    # Sorted timeline of System mode events.
-    evs = []
-    for e in _iter_event_log_system_mode(installation_id, params):
-        ts = e.get("local_timestamp")
-        if ts:
-            evs.append((pd.to_datetime(ts, errors="coerce"), e.get("event", "")))
-    evs = [x for x in evs if pd.notna(x[0])]
-    evs.sort(key=lambda x: x[0])
-
-    # Delayed-stop robot error timestamps (for linking manual stops).
-    re_results = _fetch_all_pages(
-        f"{BASE_URL}/installations/{installation_id}/robot-errors/", dict(params))
-    delayed_ts = []
-    for day_result in re_results:
-        for er in day_result.get("result", {}).get("robot_errors", []):
-            if er.get("delayed_stop"):
-                t = pd.to_datetime(er.get("local_installation_timestamp"), errors="coerce")
-                if pd.notna(t):
-                    delayed_ts.append(t)
-    delayed_ts.sort()
+    results = _fetch_all_pages(url, params)
 
     rows = []
-    i, n = 0, len(evs)
-    while i < n:
-        ts, ev = evs[i]
-        state = ev.split("\t")[1] if "\t" in ev else ev
-        if "[40]STOPPING" in state or "[70]STOPPED" in state:
-            j, end = i + 1, None
-            while j < n:
-                if "[20]RUNNING" in evs[j][1]:
-                    end = evs[j][0]
-                    break
-                j += 1
-            if end is None:
-                break
-            code = _parse_stop_code(ev)
-            dur = int((end - ts).total_seconds())
-            if code == _ERROR_STOP_CODE:
-                rows.append({"date": ts.normalize(), "category": "error_stop",
-                             "recovery_seconds": dur})
-            elif code == _CONSOLE_STOP_CODE:
-                linked = any(0 <= (ts - d).total_seconds() <= _DELAYED_STOP_WINDOW_S
-                             for d in delayed_ts)
-                if linked:
-                    rows.append({"date": ts.normalize(), "category": "manual_delayed",
-                                 "recovery_seconds": dur})
-            i = j + 1
-        else:
-            i += 1
+    for day_result in results:
+        for seg in day_result.get("result", {}).get("periods", []):
+            if seg.get("mode") != "downtime":
+                continue
+            code = seg.get("stop_code_name")
+            if code in _ERROR_STOP_CODES:
+                category = "error_stop"
+            elif code in _MANUAL_STOP_CODES:
+                category = "manual"
+            else:
+                continue
+            ts = pd.to_datetime(seg.get("start_at"), errors="coerce")
+            if pd.isna(ts):
+                continue
+            rows.append({
+                "date": ts.normalize(),
+                "category": category,
+                "recovery_seconds": seg.get("down_seconds", 0) or 0,
+            })
 
     if not rows:
         return pd.DataFrame(columns=["date", "category", "recovery_seconds"])
