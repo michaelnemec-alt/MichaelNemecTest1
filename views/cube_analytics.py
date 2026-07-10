@@ -510,15 +510,18 @@ def _view_performance(date_from_str, date_to_str, aggregation):
         all_pick_types = sorted(df_pwt["pick_type"].dropna().unique().tolist())
         all_categories = sorted(c for c in df_pwt["category"].dropna().unique().tolist() if c != "")
 
+        default_pick_types = [p for p in all_pick_types if p == "picks"]
+        default_categories = [c for c in all_categories if c in ("1", "2")]
+
         with st.sidebar:
             st.divider()
             st.markdown("#### Performance Filters")
             selected_pick_types = st.multiselect(
-                "Pick Type", all_pick_types, default=[], key="perf_pick_type",
+                "Pick Type", all_pick_types, default=default_pick_types, key="perf_pick_type",
                 placeholder="All pick types",
             )
             selected_categories = st.multiselect(
-                "Category", all_categories, default=[], key="perf_category",
+                "Category", all_categories, default=default_categories, key="perf_category",
                 placeholder="All categories",
             )
 
