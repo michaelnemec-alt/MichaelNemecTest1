@@ -45,8 +45,9 @@ section[data-testid="stSidebar"] button {
 st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>", unsafe_allow_html=True)
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
-PAGES = ["Home", "Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "CUBE Analytics *"]
+PAGES = ["Home", "Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "CUBE Analytics *", "AutoStore system *"]
 CUBE_VIEWS = ["Overview & Health", "Error & Health Metrics", "Performance", "Battery & Robots", "Health Index *"]
+AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
 
 selected = st.segmented_control(
     "nav",
@@ -69,6 +70,17 @@ if selected == "CUBE Analytics *":
     )
     if not cube_view:
         cube_view = "Overview & Health"
+
+if selected == "AutoStore system *":
+    autostore_view = st.segmented_control(
+        "autostore_nav",
+        options=AUTOSTORE_VIEWS,
+        default="Versions of Systems",
+        key="autostore_nav_selection",
+        label_visibility="collapsed",
+    )
+    if not autostore_view:
+        autostore_view = "Versions of Systems"
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -130,5 +142,10 @@ elif selected == "CUBE Analytics *":
     from views.cube_analytics import render
     logger.info("Rendering CUBE Analytics view: %s", cube_view or "Overview & Health")
     render(cube_view or "Overview & Health")
+
+elif selected == "AutoStore system *":
+    from views.cube_analytics import render_autostore
+    logger.info("Rendering AutoStore system view: %s", autostore_view or "Versions of Systems")
+    render_autostore(autostore_view or "Versions of Systems")
 
 st.markdown("<div class='footer'>Created by <b>Michael Nemec</b></div>", unsafe_allow_html=True)

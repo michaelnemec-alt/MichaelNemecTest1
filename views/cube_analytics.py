@@ -14,7 +14,7 @@ from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_robot_state, query_bin_presentations,
     query_port_wait_time_daily, query_port_uptime, query_incidents, query_robot_errors,
-    query_recovery_times,
+    query_recovery_times, query_installation_data, query_module_versions,
 )
 
 SITE_COLORS = [
@@ -59,6 +59,7 @@ METRIC_INFO = {
     "Time to Recover - Manual Stop": "Median minutes the system was down when a human stopped it \u2014 an operator console stop (STOPPED_FROM_CONSOLE) or a key switch left disarmed after restart (KEYLOCK_DISARMED). A human-response metric. Lower is better.",
     "Recovery Events - Error Stop": "Number of times the system was force-stopped by a robot error and had to be recovered, per period.",
     "Recovery Events - Manual Stop": "Number of human-initiated (console or key-lock) stop/fix/restart cycles per period.",
+    "Bins Outside": "Number of bins located outside the operational grid (e.g. at a port or service position) rather than in a storage cell, from the daily installation-data snapshot. Persistent or rising counts can indicate bins stuck at ports or awaiting rescue.",
 }
 
 
@@ -232,14 +233,14 @@ def _load_for_sites(query_fn, date_from_str, date_to_str):
     return result_df
 
 
-def render(selected_view="Overview & Health"):
-    logger.info("=== render() called with view='%s' ===", selected_view)
-    if not is_api_configured():
-        st.warning("CubeAnalytics API token not configured. Add `[cubeanalytics] token` to Streamlit secrets.")
-        return
+def _sidebar_controls(heading):
+    """Render the shared CUBE sidebar (date range, aggregation, highlight).
 
+    Returns (dt_from, dt_to, aggregation) or (None, None, None) when the
+    selection is incomplete/invalid.
+    """
     with st.sidebar:
-        st.markdown("#### CUBE Analytics")
+        st.markdown(f"#### {heading}")
 
         PRESETS = ["Yesterday", "7 days", "14 days", "30 days", "60 days", "90 days", "Custom"]
         if "cube_preset" not in st.session_state:
@@ -292,9 +293,21 @@ def render(selected_view="Overview & Health"):
 
     if not dt_from or not dt_to:
         st.info("Select both start and end dates.")
-        return
+        return None, None, None
     if dt_from > dt_to:
         st.error("'From' date must be before 'To' date.")
+        return None, None, None
+    return dt_from, dt_to, aggregation
+
+
+def render(selected_view="Overview & Health"):
+    logger.info("=== render() called with view='%s' ===", selected_view)
+    if not is_api_configured():
+        st.warning("CubeAnalytics API token not configured. Add `[cubeanalytics] token` to Streamlit secrets.")
+        return
+
+    dt_from, dt_to, aggregation = _sidebar_controls("CUBE Analytics")
+    if not dt_from:
         return
 
     date_from_str = str(dt_from)
@@ -804,3 +817,90 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
             pivot_false = _aggregate_pivot_sum(df_robot_errors, "error_stopped_false", aggregation)
             _chart_title_with_info("Error Stopped System False")
             st.plotly_chart(_make_trend_chart(pivot_false, "Error Stopped System False", "Count"), use_container_width=True)
+
+
+AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
+
+
+def render_autostore(selected_view="Versions of Systems"):
+    logger.info("=== render_autostore() called with view='%s' ===", selected_view)
+    if not is_api_configured():
+        st.warning("CubeAnalytics API token not configured. Add `[cubeanalytics] token` to Streamlit secrets.")
+        return
+
+    dt_from, dt_to, aggregation = _sidebar_controls("AutoStore system")
+    if not dt_from:
+        return
+
+    date_from_str = str(dt_from)
+    date_to_str = str(dt_to)
+
+    try:
+        if selected_view == "Bin overview":
+            _view_bin_overview(date_from_str, date_to_str, aggregation)
+        else:
+            _view_versions(date_from_str, date_to_str)
+        logger.info("=== render_autostore() completed for '%s' ===", selected_view)
+    except Exception as e:
+        logger.error("=== render_autostore() CRASHED for '%s': %s ===", selected_view, e)
+        logger.error(traceback.format_exc())
+        st.error(f"Error loading view: {e}")
+
+
+def _view_versions(date_from_str, date_to_str):
+    st.markdown("#### Versions of Systems")
+    with st.spinner("Loading module versions..."):
+        df = _load_for_sites(query_module_versions, date_from_str, date_to_str)
+
+    if df.empty:
+        st.warning("No module-version data returned for the selected range.")
+        return
+
+    latest = df.loc[df.groupby("site")["date"].transform("max") == df["date"]]
+    table = latest.pivot_table(
+        index="site", columns="module", values="version", aggfunc="first"
+    )
+    table.index = [s.split("-", 1)[-1] if "-" in s else s for s in table.index]
+    table.index.name = "Site"
+    table = table.fillna("—")
+
+    st.caption(
+        "Latest module version per site. A trailing * marks a module reporting "
+        "more than one distinct version across its devices."
+    )
+    st.dataframe(table, use_container_width=True)
+
+
+def _view_bin_overview(date_from_str, date_to_str, aggregation):
+    st.markdown("#### Bin overview")
+    with st.spinner("Loading installation data..."):
+        df = _load_for_sites(query_installation_data, date_from_str, date_to_str)
+
+    if df.empty:
+        st.warning("No installation data returned for the selected range.")
+        return
+
+    df_bin = df[df["group"] == "bin"].copy()
+    if df_bin.empty:
+        st.warning("No bin data returned for the selected range.")
+        return
+
+    latest = df_bin.loc[df_bin.groupby("site")["date"].transform("max") == df_bin["date"]]
+    type_table = latest[latest["type"] != "outside"].pivot_table(
+        index="site", columns="type", values="count", aggfunc="sum"
+    )
+    type_table.index = [s.split("-", 1)[-1] if "-" in s else s for s in type_table.index]
+    type_table.index.name = "Site"
+    type_table = type_table.fillna(0).astype(int)
+    st.caption("Current bin count per site by bin type (latest snapshot in range).")
+    st.dataframe(type_table, use_container_width=True)
+
+    st.divider()
+
+    df_out = df_bin[df_bin["type"] == "outside"][["date", "site", "count"]].copy()
+    _chart_title_with_info("Bins Outside")
+    if df_out.empty:
+        st.info("No bins-outside data in this range.")
+        return
+    pivot = _aggregate_pivot(df_out, "count", aggregation)
+    st.plotly_chart(_make_trend_chart(pivot, "Bins Outside", "Bins outside"), use_container_width=True)

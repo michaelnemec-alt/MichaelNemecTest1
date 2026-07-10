@@ -1,5 +1,8 @@
 """CubeAnalytics API helpers."""
 
+import re
+from collections import Counter
+
 import streamlit as st
 import pandas as pd
 import requests
@@ -473,4 +476,107 @@ def query_port_wait_time(installation_id, date_from_str, date_to_str):
 
     df = pd.DataFrame(rows)
     df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+    return df
+
+
+_INSTALLATION_GROUPS = [
+    "bin", "port", "robot", "charger", "interface", "xhandler",
+    "zone_type", "radio_frequency", "environment_type",
+]
+
+
+@st.cache_data(ttl=300)
+def query_installation_data(installation_id, date_from_str, date_to_str):
+    """Daily asset census from the installation-data endpoint.
+
+    Returns one row per (date, group, type) with columns:
+      date, group, type, count
+
+    group is one of bin/port/robot/charger/interface/xhandler/zone_type/
+    radio_frequency/environment_type; type is the asset type (e.g. bins:
+    'Standard 330', 'outside'); count is that day's snapshot count.
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/installation-data/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        d = day_result.get("date")
+        res = day_result.get("result", {})
+        for group in _INSTALLATION_GROUPS:
+            for pair in res.get(group) or []:
+                rows.append({
+                    "date": d,
+                    "group": group,
+                    "type": pair.get("type"),
+                    "count": pair.get("count"),
+                })
+
+    if not rows:
+        return pd.DataFrame(columns=["date", "group", "type", "count"])
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+_VERSION_RE = re.compile(r"^\d+(\.\d+)+")
+
+
+def _representative_version(inst_map):
+    """Pick a single version string for a module from its per-instance entries.
+
+    Prefers entries with no sub_module (the module's own version). Otherwise
+    falls back to the most common version-looking value across instances. A
+    trailing '*' marks modules that report more than one distinct version.
+    """
+    null_versions = set()
+    version_counts = Counter()
+    for entries in inst_map.values():
+        for e in entries:
+            val = e.get("data")
+            if val is None:
+                continue
+            if e.get("sub_module") is None:
+                null_versions.add(val)
+            if _VERSION_RE.match(str(val)):
+                version_counts[val] += 1
+
+    if null_versions:
+        vals = sorted(null_versions)
+        return vals[0] + (" *" if len(vals) > 1 else "")
+    if version_counts:
+        distinct = len(version_counts)
+        top = version_counts.most_common(1)[0][0]
+        return top + (" *" if distinct > 1 else "")
+    return ""
+
+
+@st.cache_data(ttl=300)
+def query_module_versions(installation_id, date_from_str, date_to_str):
+    """Module software/firmware versions from the module-versions endpoint.
+
+    Returns one row per (date, module) with columns: date, module, version.
+    version is a single representative string per module (see
+    _representative_version); '*' flags modules with mixed versions.
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/module-versions/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        d = day_result.get("date")
+        data = day_result.get("result", {}).get("data", {})
+        for module, inst_map in data.items():
+            rows.append({
+                "date": d,
+                "module": module,
+                "version": _representative_version(inst_map),
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=["date", "module", "version"])
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
