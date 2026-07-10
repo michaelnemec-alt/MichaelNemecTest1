@@ -544,7 +544,7 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         "Software = share of the site's modules running the fleet-latest version. "
         "This composite feeds the Availability term of OEE.",
     )
-    col_tbl, col_chart = st.columns([1, 1], gap="small")
+    col_tbl, col_chart = st.columns([5, 7], gap="small")
     with col_tbl:
         _render_colored_table(
             latest,
@@ -1208,7 +1208,7 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         "Quality = share of stops that were NOT error-forced (uptime "
         "stop codes); days with no stops count as 100%. Proxies pending official AutoStore targets.",
     )
-    col_tbl, col_chart = st.columns([1, 1], gap="small")
+    col_tbl, col_chart = st.columns([5, 7], gap="small")
     with col_tbl:
         _render_colored_table(
             latest,
