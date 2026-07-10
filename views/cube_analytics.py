@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import numbers
+import re
 import time
 import traceback
 
@@ -832,6 +833,7 @@ _TABLE_CSS = """
 .as-table th { background: #f5f7fa; color: #1F3864; font-weight: 600; }
 .as-table th.as-rowhdr, .as-table td.as-rowhdr { background: #fafafa; font-weight: 600; }
 .as-table tbody tr:nth-child(even) td { background: #fcfcfd; }
+.as-table td.as-outdated { background: #fdecea !important; color: #b02a1a; font-weight: 600; }
 </style>
 """
 
@@ -882,6 +884,40 @@ def render_autostore(selected_view="Versions of Systems"):
         st.error(f"Error loading view: {e}")
 
 
+def _version_key(value):
+    """Comparable key for a version string (ignores trailing '*' / non-digits)."""
+    parts = re.findall(r"\d+", str(value))
+    return tuple(int(p) for p in parts)
+
+
+def _render_version_table(table):
+    """Render the module x site version table, marking outdated cells red.
+
+    A cell is flagged outdated (red) when its version is behind the newest
+    version any site in the fleet runs for that module.
+    """
+    sites = list(table.columns)
+    header = "".join(f"<th>{s}</th>" for s in sites)
+    rows = []
+    for module, row in table.iterrows():
+        keys = {s: _version_key(row[s]) for s in sites if str(row[s]) not in ("", "—")}
+        max_key = max(keys.values()) if keys else ()
+        cells = []
+        for s in sites:
+            val = row[s]
+            cls = ""
+            if s in keys and keys[s] and keys[s] < max_key:
+                cls = ' class="as-outdated"'
+            cells.append(f"<td{cls}>{val}</td>")
+        rows.append(f'<tr><td class="as-rowhdr">{module}</td>{"".join(cells)}</tr>')
+    html = (
+        f'{_TABLE_CSS}<div class="as-table-wrap"><table class="as-table">'
+        f'<thead><tr><th class="as-rowhdr">Module</th>{header}</tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
 def _view_versions(date_from_str, date_to_str):
     st.markdown("#### Versions of Systems")
     with st.spinner("Loading module versions..."):
@@ -893,17 +929,19 @@ def _view_versions(date_from_str, date_to_str):
 
     latest = df.loc[df.groupby("site")["date"].transform("max") == df["date"]]
     table = latest.pivot_table(
-        index="site", columns="module", values="version", aggfunc="first"
+        index="module", columns="site", values="version", aggfunc="first"
     )
-    table.index = [s.split("-", 1)[-1] if "-" in s else s for s in table.index]
-    table.index.name = "Site"
+    table.columns = [s.split("-", 1)[-1] if "-" in s else s for s in table.columns]
     table = table.fillna("—")
 
     st.caption(
-        "Latest module version per site. A trailing * marks a module reporting "
-        "more than one distinct version across its devices."
+        "Installed module version per site (modules in rows, sites in columns). "
+        "A trailing * marks a module reporting more than one distinct version "
+        "across its devices. The API exposes only installed versions, so cells "
+        "are highlighted red when a site lags behind the newest version any site "
+        "in the fleet runs for that module."
     )
-    _render_html_table(table)
+    _render_version_table(table)
 
 
 def _view_bin_overview(date_from_str, date_to_str, aggregation):
