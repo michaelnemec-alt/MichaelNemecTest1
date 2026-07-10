@@ -544,16 +544,18 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         "Software = share of the site's modules running the fleet-latest version. "
         "This composite feeds the Availability term of OEE.",
     )
-    _render_colored_table(
-        latest,
-        num_cols=list(label_map.values()),
-        color_funcs={"Availability KPI %": _color_availability},
-    )
-    st.caption(f"Period: {period_label}")
-
-    pivot = _aggregate_pivot(avail, "availability_pct", aggregation)
-    _chart_title_with_info("Availability KPI")
-    st.plotly_chart(_make_trend_chart(pivot, "Availability KPI", "Availability %", pct=True), use_container_width=True)
+    col_tbl, col_chart = st.columns([1, 1], gap="small")
+    with col_tbl:
+        _render_colored_table(
+            latest,
+            num_cols=list(label_map.values()),
+            color_funcs={"Availability KPI %": _color_availability},
+        )
+        st.caption(f"Period: {period_label}")
+    with col_chart:
+        pivot = _aggregate_pivot(avail, "availability_pct", aggregation)
+        _chart_title_with_info("Availability KPI")
+        st.plotly_chart(_make_trend_chart(pivot, "Availability KPI", "Availability %", pct=True), use_container_width=True)
 
     for col, title in (
         ("system_uptime_pct", "System Uptime"),
@@ -1206,16 +1208,18 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         "Quality = share of stops that were NOT error-forced (uptime "
         "stop codes); days with no stops count as 100%. Proxies pending official AutoStore targets.",
     )
-    _render_colored_table(
-        latest,
-        num_cols=["Availability %", "Performance %", "Quality %", "OEE %"],
-        color_funcs={"OEE %": _color_oee},
-    )
-    st.caption(f"Period: {period_label}")
-
-    pivot = _aggregate_pivot(merged, "oee_pct", aggregation)
-    _chart_title_with_info("OEE")
-    st.plotly_chart(_make_trend_chart(pivot, "OEE", "OEE %", pct=True), use_container_width=True)
+    col_tbl, col_chart = st.columns([1, 1], gap="small")
+    with col_tbl:
+        _render_colored_table(
+            latest,
+            num_cols=["Availability %", "Performance %", "Quality %", "OEE %"],
+            color_funcs={"OEE %": _color_oee},
+        )
+        st.caption(f"Period: {period_label}")
+    with col_chart:
+        pivot = _aggregate_pivot(merged, "oee_pct", aggregation)
+        _chart_title_with_info("OEE")
+        st.plotly_chart(_make_trend_chart(pivot, "OEE", "OEE %", pct=True), use_container_width=True)
 
 
 def _view_module_robots(date_from_str, date_to_str, aggregation):
