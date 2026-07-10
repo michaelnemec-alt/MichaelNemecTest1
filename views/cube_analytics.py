@@ -95,17 +95,19 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
     site_means = {s: pivot_df[s].mean() for s in sites}
     sorted_sites = sorted(sites, key=lambda s: site_means.get(s, 0), reverse=True)
     color_map = {site: SITE_COLORS[i % len(SITE_COLORS)] for i, site in enumerate(sites)}
-    highlight = st.session_state.get("cube_highlight", "All sites")
-    has_highlight = highlight and highlight != "All sites" and highlight in sites
+    highlighted = st.session_state.get("cube_highlight", [])
+    highlight_set = {s for s in highlighted if s in sites}
+    has_highlight = bool(highlight_set)
     if has_highlight:
-        # Draw the highlighted site last so its solid line sits on top of the dimmed ones.
-        sorted_sites = [s for s in sorted_sites if s != highlight] + [highlight]
+        # Draw the highlighted sites last so their solid lines sit on top of the dimmed ones.
+        sorted_sites = [s for s in sorted_sites if s not in highlight_set] + \
+            [s for s in sorted_sites if s in highlight_set]
     for site in sorted_sites:
         color = color_map[site]
         vals = pivot_df[site]
         short_name = site.split("-", 1)[-1] if "-" in site else site
         hover_fmt = "%{y:.2f}%" if pct else "%{y:.2f}"
-        if has_highlight and site != highlight:
+        if has_highlight and site not in highlight_set:
             line_color = _hex_to_rgba(color, 0.15)
             line_width = 1.5
             marker = dict(size=3, color=_hex_to_rgba(color, 0.15))
@@ -278,14 +280,14 @@ def render(selected_view="Overview & Health"):
             site_names = sorted(inst["name"] for inst in get_installations())
         except Exception:
             site_names = []
-        highlight_options = ["All sites"] + site_names
-        st.selectbox(
-            "Highlight site",
-            highlight_options,
-            index=0,
+        st.multiselect(
+            "Highlight site(s)",
+            site_names,
+            default=[],
             key="cube_highlight",
-            format_func=lambda s: s if s == "All sites" else (s.split("-", 1)[-1] if "-" in s else s),
-            help="Keep one site solid and fully coloured while the others fade into the background, so you can see how it compares to the rest without hiding them.",
+            placeholder="All sites",
+            format_func=lambda s: s.split("-", 1)[-1] if "-" in s else s,
+            help="Keep the selected site(s) solid and fully coloured while the others fade into the background, so you can see how they compare to the rest without hiding them.",
         )
 
     if not dt_from or not dt_to:
