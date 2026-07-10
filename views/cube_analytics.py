@@ -826,7 +826,7 @@ AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
 _TABLE_CSS = """
 <style>
 .as-table-wrap { overflow-x: auto; margin: 4px 0 8px 0; }
-.as-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.as-table { border-collapse: collapse; font-size: 12px; width: auto; max-width: 100%; }
 .as-table th, .as-table td {
     border: 1px solid #eee; padding: 6px 10px; text-align: left; white-space: nowrap;
 }
@@ -989,4 +989,9 @@ def _view_bin_overview(date_from_str, date_to_str, aggregation):
             st.info("No bins-outside data in this range.")
         else:
             pivot = _aggregate_pivot(df_out, "count", aggregation)
-            st.plotly_chart(_make_trend_chart(pivot, "Bins Outside", "Bins outside"), use_container_width=True)
+            fig = _make_trend_chart(pivot, "Bins Outside", "Bins outside")
+            fig.update_layout(
+                margin=dict(l=55, r=20, t=30, b=70),
+                legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="left", x=0),
+            )
+            st.plotly_chart(fig, use_container_width=True)
