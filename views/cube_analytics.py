@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
+import numbers
 import time
 import traceback
 
@@ -821,6 +822,40 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
 
 AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
 
+_TABLE_CSS = """
+<style>
+.as-table-wrap { overflow-x: auto; margin: 4px 0 8px 0; }
+.as-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.as-table th, .as-table td {
+    border: 1px solid #eee; padding: 6px 10px; text-align: left; white-space: nowrap;
+}
+.as-table th { background: #f5f7fa; color: #1F3864; font-weight: 600; }
+.as-table th.as-rowhdr, .as-table td.as-rowhdr { background: #fafafa; font-weight: 600; }
+.as-table tbody tr:nth-child(even) td { background: #fcfcfd; }
+</style>
+"""
+
+
+def _render_html_table(df):
+    """Render a DataFrame as a static HTML table (bypasses Arrow/st.dataframe)."""
+    def _fmt(v):
+        if isinstance(v, numbers.Integral) and not isinstance(v, bool):
+            return f"{int(v):,}"
+        return v
+
+    header = "".join(f"<th>{c}</th>" for c in df.columns)
+    rows = []
+    for idx, row in df.iterrows():
+        cells = "".join(f"<td>{_fmt(v)}</td>" for v in row)
+        rows.append(f'<tr><td class="as-rowhdr">{idx}</td>{cells}</tr>')
+    index_label = df.index.name or ""
+    html = (
+        f'{_TABLE_CSS}<div class="as-table-wrap"><table class="as-table">'
+        f'<thead><tr><th class="as-rowhdr">{index_label}</th>{header}</tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
 
 def render_autostore(selected_view="Versions of Systems"):
     logger.info("=== render_autostore() called with view='%s' ===", selected_view)
@@ -868,7 +903,7 @@ def _view_versions(date_from_str, date_to_str):
         "Latest module version per site. A trailing * marks a module reporting "
         "more than one distinct version across its devices."
     )
-    st.dataframe(table, use_container_width=True)
+    _render_html_table(table)
 
 
 def _view_bin_overview(date_from_str, date_to_str, aggregation):
@@ -893,7 +928,7 @@ def _view_bin_overview(date_from_str, date_to_str, aggregation):
     type_table.index.name = "Site"
     type_table = type_table.fillna(0).astype(int)
     st.caption("Current bin count per site by bin type (latest snapshot in range).")
-    st.dataframe(type_table, use_container_width=True)
+    _render_html_table(type_table)
 
     st.divider()
 
