@@ -45,7 +45,8 @@ section[data-testid="stSidebar"] button {
 st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>", unsafe_allow_html=True)
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
-PAGES = ["Home", "Reporting & Data Tools *", "System KPI overview *", "Facility Performance KPI *", "AutoStore system *"]
+PAGES = ["Home", "Reporting & Data Tools *", "System OEE *"]
+OEE_VIEWS = ["System KPI overview *", "Facility Performance KPI *", "AutoStore system *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
 SYSTEM_KPI_VIEWS = ["Overview & Health", "Error & Health Metrics *"]
 ERROR_HEALTH_VIEWS = ["Uptime metrics", "Robots", "Ports", "Chargers", "System"]
@@ -64,6 +65,7 @@ if not selected:
     selected = "Home"
 
 reporting_view = None
+oee_view = None
 system_view = None
 error_health_view = None
 facility_view = None
@@ -78,40 +80,49 @@ if selected == "Reporting & Data Tools *":
         label_visibility="collapsed",
     ) or "Prio vs Picking"
 
-if selected == "System KPI overview *":
-    system_view = st.segmented_control(
-        "system_kpi_nav",
-        options=SYSTEM_KPI_VIEWS,
-        default="Overview & Health",
-        key="system_kpi_nav_selection",
+if selected == "System OEE *":
+    oee_view = st.segmented_control(
+        "oee_nav",
+        options=OEE_VIEWS,
+        default="System KPI overview *",
+        key="oee_nav_selection",
         label_visibility="collapsed",
-    ) or "Overview & Health"
-    if system_view == "Error & Health Metrics *":
-        error_health_view = st.segmented_control(
-            "error_health_nav",
-            options=ERROR_HEALTH_VIEWS,
-            default="Uptime metrics",
-            key="error_health_nav_selection",
+    ) or "System KPI overview *"
+
+    if oee_view == "System KPI overview *":
+        system_view = st.segmented_control(
+            "system_kpi_nav",
+            options=SYSTEM_KPI_VIEWS,
+            default="Overview & Health",
+            key="system_kpi_nav_selection",
             label_visibility="collapsed",
-        ) or "Uptime metrics"
+        ) or "Overview & Health"
+        if system_view == "Error & Health Metrics *":
+            error_health_view = st.segmented_control(
+                "error_health_nav",
+                options=ERROR_HEALTH_VIEWS,
+                default="Uptime metrics",
+                key="error_health_nav_selection",
+                label_visibility="collapsed",
+            ) or "Uptime metrics"
 
-if selected == "Facility Performance KPI *":
-    facility_view = st.segmented_control(
-        "facility_nav",
-        options=FACILITY_VIEWS,
-        default="Time to Recover",
-        key="facility_nav_selection",
-        label_visibility="collapsed",
-    ) or "Time to Recover"
+    elif oee_view == "Facility Performance KPI *":
+        facility_view = st.segmented_control(
+            "facility_nav",
+            options=FACILITY_VIEWS,
+            default="Time to Recover",
+            key="facility_nav_selection",
+            label_visibility="collapsed",
+        ) or "Time to Recover"
 
-if selected == "AutoStore system *":
-    autostore_view = st.segmented_control(
-        "autostore_nav",
-        options=AUTOSTORE_VIEWS,
-        default="Versions of Systems",
-        key="autostore_nav_selection",
-        label_visibility="collapsed",
-    ) or "Versions of Systems"
+    elif oee_view == "AutoStore system *":
+        autostore_view = st.segmented_control(
+            "autostore_nav",
+            options=AUTOSTORE_VIEWS,
+            default="Versions of Systems",
+            key="autostore_nav_selection",
+            label_visibility="collapsed",
+        ) or "Versions of Systems"
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -151,7 +162,7 @@ if selected == "Home":
         </div>""", unsafe_allow_html=True)
     with c2:
         st.markdown("""<div class="section-card">
-            <div style="font-size:0.7em; text-transform:uppercase; letter-spacing:1px; color:#9ca3af; margin-bottom:8px;">System Monitoring</div>
+            <div style="font-size:0.7em; text-transform:uppercase; letter-spacing:1px; color:#9ca3af; margin-bottom:8px;">System OEE</div>
             <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>System KPI overview</b><br><span style="color:#6b7280; font-size:0.85em;">Availability & health per module (System, Robots, Ports, Chargers)</span></div>
             <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>Facility Performance KPI</b><br><span style="color:#6b7280; font-size:0.85em;">Time-to-recover, reliability (MTBF/MBBD), incidents</span></div>
             <div style="padding:8px 0;"><b>AutoStore system</b><br><span style="color:#6b7280; font-size:0.85em;">Module versions & bin overview across 10 sites</span></div>
@@ -171,22 +182,21 @@ elif selected == "Reporting & Data Tools *":
         from views.cube_analytics import render
         render("Performance")
 
-elif selected == "System KPI overview *":
-    from views.cube_analytics import render
-    if system_view == "Overview & Health":
-        render("Overview & Health")
-    else:
-        logger.info("Rendering Error & Health sub-view: %s", error_health_view)
-        render(error_health_view or "Uptime metrics")
-
-elif selected == "Facility Performance KPI *":
-    from views.cube_analytics import render
-    logger.info("Rendering Facility Performance view: %s", facility_view)
-    render(facility_view or "Time to Recover")
-
-elif selected == "AutoStore system *":
-    from views.cube_analytics import render_autostore
-    logger.info("Rendering AutoStore system view: %s", autostore_view or "Versions of Systems")
-    render_autostore(autostore_view or "Versions of Systems")
+elif selected == "System OEE *":
+    if oee_view == "System KPI overview *":
+        from views.cube_analytics import render
+        if system_view == "Overview & Health":
+            render("Overview & Health")
+        else:
+            logger.info("Rendering Error & Health sub-view: %s", error_health_view)
+            render(error_health_view or "Uptime metrics")
+    elif oee_view == "Facility Performance KPI *":
+        from views.cube_analytics import render
+        logger.info("Rendering Facility Performance view: %s", facility_view)
+        render(facility_view or "Time to Recover")
+    elif oee_view == "AutoStore system *":
+        from views.cube_analytics import render_autostore
+        logger.info("Rendering AutoStore system view: %s", autostore_view or "Versions of Systems")
+        render_autostore(autostore_view or "Versions of Systems")
 
 st.markdown("<div class='footer'>Created by <b>Michael Nemec</b></div>", unsafe_allow_html=True)
