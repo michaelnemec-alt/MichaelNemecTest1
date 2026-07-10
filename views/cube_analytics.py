@@ -388,14 +388,35 @@ def _compute_availability(df_uptime, df_port, df_robot):
 PERF_TARGET_DIGGING = 1.0
 PERF_TARGET_ROBOT_WORKING = 60.0
 PERF_TARGET_WASTE = 0.1
+PERF_TARGET_USERWAIT = 2.0
+PERF_TARGET_REUSE = 6.0
 
 
-def _compute_performance(df_robot, df_health, df_dig):
-    """Per (site, date) Performance KPI = mean of three target-normalised sub-scores.
+def _scoped_user_wait(df_pwt):
+    """Per (site, date) user wait time (average_wait_bin), count-weighted, scoped to
+    pick_type == 'picks' and category 1 & 2 only — the sole component the user asked
+    to filter by type/category. Returns columns: site, date, user_wait."""
+    if df_pwt.empty or "category" not in df_pwt.columns:
+        return pd.DataFrame(columns=["site", "date", "user_wait"])
+    d = df_pwt[(df_pwt["pick_type"] == "picks") & (df_pwt["category"].isin(["1", "2"]))].copy()
+    if d.empty:
+        return pd.DataFrame(columns=["site", "date", "user_wait"])
+    d["w"] = d["average_wait_bin"] * d["count"]
+    g = d.groupby(["site", "date"]).agg(w=("w", "sum"), c=("count", "sum")).reset_index()
+    g["user_wait"] = g["w"] / g["c"].where(g["c"] != 0)
+    return g[["site", "date", "user_wait"]]
 
-    - Robot working score  = min(working_pct / 60 × 100, 100)   (higher better)
-    - Digging depth score  = min(1.0 / avg_digging_depth × 100, 100)  (lower better)
-    - Waste time score     = min(0.1 / waste_time × 100, 100)   (lower better)
+
+def _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits):
+    """Per (site, date) Performance KPI = mean of three interaction-aware sub-scores.
+
+    ① Utilisation-adjusted flow (robot working% ↔ user wait, picks/cat 1&2):
+       working_score = min(working_pct / 60 × 100, 100).
+       If working_pct ≥ 60 → busy, high wait excused → flow = 100.
+       Else → flow = working_score × min(2.0s / user_wait, 1).
+    ② Waste time (system-level): min(0.1 / waste_time × 100, 100).
+    ③ Config quality = mean of digging score min(1.0 / depth × 100, 100)
+       and reuse score min(picks_per_bin / 6.0 × 100, 100).
     """
     frames = []
     if not df_robot.empty and "working_pct" in df_robot.columns:
@@ -403,12 +424,20 @@ def _compute_performance(df_robot, df_health, df_dig):
         r["robot_working_pct"] = df_robot["working_pct"].values
         r["working_score"] = (r["robot_working_pct"] / PERF_TARGET_ROBOT_WORKING * 100).clip(upper=100)
         frames.append(r)
+    if not df_waits.empty and "user_wait" in df_waits.columns:
+        frames.append(df_waits[["site", "date", "user_wait"]].copy())
     if not df_dig.empty and "avg_digging_depth" in df_dig.columns:
         d = df_dig[["site", "date", "avg_digging_depth"]].copy()
         d["digging_score"] = d["avg_digging_depth"].apply(
             lambda v: 100.0 if pd.isna(v) or v <= 0 else min(PERF_TARGET_DIGGING / v * 100, 100)
         )
         frames.append(d)
+    if not df_usage.empty and "picks_per_bin" in df_usage.columns:
+        u = df_usage[["site", "date", "picks_per_bin"]].copy()
+        u["reuse_score"] = u["picks_per_bin"].apply(
+            lambda v: float("nan") if pd.isna(v) else min(v / PERF_TARGET_REUSE * 100, 100)
+        )
+        frames.append(u)
     if not df_health.empty and "waste_time" in df_health.columns:
         w = df_health[["site", "date", "waste_time"]].copy()
         w["waste_score"] = w["waste_time"].apply(
@@ -420,7 +449,23 @@ def _compute_performance(df_robot, df_health, df_dig):
     merged = frames[0]
     for f in frames[1:]:
         merged = merged.merge(f, on=["site", "date"], how="outer")
-    score_cols = [c for c in ["working_score", "digging_score", "waste_score"] if c in merged.columns]
+
+    def _flow(row):
+        ws = row.get("working_score")
+        if pd.isna(ws):
+            return float("nan")
+        if row.get("robot_working_pct", 0) >= PERF_TARGET_ROBOT_WORKING:
+            return 100.0
+        uw = row.get("user_wait")
+        if pd.isna(uw) or uw <= 0:
+            return ws
+        return ws * min(PERF_TARGET_USERWAIT / uw, 1.0)
+
+    merged["flow_score"] = merged.apply(_flow, axis=1)
+    cfg_cols = [c for c in ["digging_score", "reuse_score"] if c in merged.columns]
+    if cfg_cols:
+        merged["config_score"] = merged[cfg_cols].mean(axis=1)
+    score_cols = [c for c in ["flow_score", "waste_score", "config_score"] if c in merged.columns]
     merged["performance_pct"] = merged[score_cols].mean(axis=1)
     return merged
 
@@ -507,17 +552,19 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
 
 def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     with st.spinner("Loading performance..."):
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=5) as pool:
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
             f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
+            f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
         df_robot = f_robot.result()
         df_health = f_health.result()
         df_dig = f_dig.result()
         df_usage = f_usage.result()
+        df_waits = _scoped_user_wait(f_pwt.result())
 
-    perf = _compute_performance(df_robot, df_health, df_dig)
+    perf = _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits)
     if perf.empty:
         st.warning("No data returned for the selected date range.")
         return
@@ -530,7 +577,9 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
 
     label_map = {
         "robot_working_pct": "Robot Working %",
+        "user_wait": "User Wait (s)",
         "avg_digging_depth": "Digging Depth",
+        "picks_per_bin": "Picks/Bin",
         "waste_time": "Waste Time (s)",
         "performance_pct": "Performance KPI %",
     }
@@ -542,9 +591,12 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
 
     _title_with_info(
         "Performance KPI — All Sites",
-        "Performance KPI = mean of three target-normalised scores: "
-        "robot working% vs 60% target, digging depth vs 1 target, waste time vs 0.1s target. "
-        "Each score hits 100 at (or beyond) target and scales down linearly. "
+        "Performance KPI = mean of three interaction-aware sub-scores. "
+        "① Utilisation-adjusted flow: robot working% (target 60%); high user wait is "
+        "excused when the system is busy (working% ≥ 60), penalised when it is not. "
+        "User wait is scoped to picks / category 1 & 2. "
+        "② Waste time (system-level) vs 0.1s target. "
+        "③ Config quality: mean of digging depth (target 1) and bin reuse (picks/bin vs 6). "
         "This composite feeds the Performance term of OEE.",
     )
     _render_colored_table(
@@ -566,6 +618,16 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
             "Target 60%. Feeds the Performance KPI.",
         )
         st.plotly_chart(_make_trend_chart(pivot, "Robot Working %", "Working %", threshold=60.0, threshold_label="Target 60%", pct=True), use_container_width=True)
+
+    if "user_wait" in perf.columns:
+        pivot = _aggregate_pivot(perf, "user_wait", aggregation)
+        _chart_title_with_info(
+            "User Wait Time (picks, cat 1 & 2)",
+            "Average time the operator waits at the port for the next bin to arrive, "
+            "scoped to picks / category 1 & 2. Target 2s. Lower is better. "
+            "Pairs with robot working% in sub-score ① (excused when the system is busy).",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "User Wait Time (picks, cat 1 & 2)", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
 
     if "avg_digging_depth" in perf.columns:
         pivot = _aggregate_pivot(perf, "avg_digging_depth", aggregation)
@@ -1021,19 +1083,23 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
 
 def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     with st.spinner("Loading OEE inputs..."):
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=8) as pool:
             f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
             f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
             f_recovery = pool.submit(_load_for_sites, query_recovery_times, date_from_str, date_to_str)
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
+            f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
+            f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
         df_uptime = f_uptime.result()
         df_port = f_port.result()
         df_robot = f_robot.result()
         df_recovery = f_recovery.result()
         df_health = f_health.result()
         df_dig = f_dig.result()
+        df_usage = f_usage.result()
+        df_waits = _scoped_user_wait(f_pwt.result())
 
     if df_uptime.empty or df_robot.empty:
         st.warning("No data returned for the selected date range.")
@@ -1044,7 +1110,7 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         st.warning("Not enough data to compute Availability.")
         return
 
-    pf = _compute_performance(df_robot, df_health, df_dig)
+    pf = _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits)
     if pf.empty:
         st.warning("Not enough data to compute Performance.")
         return
@@ -1102,7 +1168,9 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         "OEE = Availability × Performance × Quality, per site. "
         "Availability = composite Availability KPI (mean of System/Port/Robot uptime, "
         "see Availability KPI tab). Performance = composite Performance KPI (mean of three "
-        "target-normalised scores: robot working% vs 60%, digging depth vs 1, waste time vs 0.1s). "
+        "interaction sub-scores: utilisation-adjusted flow [robot working% vs 60% with user wait "
+        "on picks/cat 1&2 excused when busy], waste time vs 0.1s, and config quality [digging vs 1 + "
+        "bin reuse vs 6]; see Performance KPI tab). "
         "Quality = share of stops that were NOT error-forced (uptime "
         "stop codes); days with no stops count as 100%. Proxies pending official AutoStore targets.",
     )
