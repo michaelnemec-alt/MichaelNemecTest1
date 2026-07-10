@@ -46,7 +46,7 @@ st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
 PAGES = ["Home", "Reporting & Data Tools *", "System OEE *"]
-OEE_VIEWS = ["OEE Overview", "System KPI overview *", "Facility Performance KPI *", "AutoStore system *"]
+OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Facility KPI *", "AutoStore system *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
 SYSTEM_KPI_VIEWS = ["Availability KPI", "Error & Health Metrics *"]
 ERROR_HEALTH_VIEWS = ["Uptime metrics", "Robots", "Ports", "Chargers", "System"]
@@ -89,7 +89,7 @@ if selected == "System OEE *":
         label_visibility="collapsed",
     ) or "OEE Overview"
 
-    if oee_view == "System KPI overview *":
+    if oee_view == "Availability KPI *":
         system_view = st.segmented_control(
             "system_kpi_nav",
             options=SYSTEM_KPI_VIEWS,
@@ -106,7 +106,7 @@ if selected == "System OEE *":
                 label_visibility="collapsed",
             ) or "Uptime metrics"
 
-    elif oee_view == "Facility Performance KPI *":
+    elif oee_view == "Facility KPI *":
         facility_view = st.segmented_control(
             "facility_nav",
             options=FACILITY_VIEWS,
@@ -163,8 +163,8 @@ if selected == "Home":
     with c2:
         st.markdown("""<div class="section-card">
             <div style="font-size:0.7em; text-transform:uppercase; letter-spacing:1px; color:#9ca3af; margin-bottom:8px;">System OEE</div>
-            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>System KPI overview</b><br><span style="color:#6b7280; font-size:0.85em;">Availability & health per module (System, Robots, Ports, Chargers)</span></div>
-            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>Facility Performance KPI</b><br><span style="color:#6b7280; font-size:0.85em;">Time-to-recover, reliability (MTBF/MBBD), incidents</span></div>
+            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>Availability KPI</b><br><span style="color:#6b7280; font-size:0.85em;">Availability & health per module (System, Robots, Ports, Chargers)</span></div>
+            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>Facility KPI</b><br><span style="color:#6b7280; font-size:0.85em;">Time-to-recover, reliability (MTBF/MBBD), incidents</span></div>
             <div style="padding:8px 0;"><b>AutoStore system</b><br><span style="color:#6b7280; font-size:0.85em;">Module versions & bin overview across 10 sites</span></div>
         </div>""", unsafe_allow_html=True)
 
@@ -186,14 +186,14 @@ elif selected == "System OEE *":
     if oee_view == "OEE Overview":
         from views.cube_analytics import render
         render("OEE Overview")
-    elif oee_view == "System KPI overview *":
+    elif oee_view == "Availability KPI *":
         from views.cube_analytics import render
         if system_view == "Availability KPI":
             render("Availability KPI")
         else:
             logger.info("Rendering Error & Health sub-view: %s", error_health_view)
             render(error_health_view or "Uptime metrics")
-    elif oee_view == "Facility Performance KPI *":
+    elif oee_view == "Facility KPI *":
         from views.cube_analytics import render
         logger.info("Rendering Facility Performance view: %s", facility_view)
         render(facility_view or "Time to Recover")
