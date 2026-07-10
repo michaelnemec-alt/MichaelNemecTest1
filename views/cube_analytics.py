@@ -443,16 +443,14 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
 
 def _view_error_health(date_from_str, date_to_str, aggregation):
     with st.spinner("Loading uptime and health data..."):
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
             f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
-            f_incidents = pool.submit(_load_for_sites, query_incidents, date_from_str, date_to_str)
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
         df_health = f_health.result()
         df_uptime = f_uptime.result()
         df_port_uptime = f_port.result()
-        df_incidents = f_incidents.result()
         df_robot = f_robot.result()
 
     if df_health.empty:
@@ -482,36 +480,17 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
             st.plotly_chart(_make_trend_chart(pivot, "Robot Uptime", "Uptime %", pct=True), use_container_width=True)
 
     st.divider()
-    st.markdown("#### Availability")
-
-    if not df_uptime.empty:
-        df_uptime["system_availability_pct"] = df_uptime["up_ratio"] * 100
-        pivot = _aggregate_pivot(df_uptime, "system_availability_pct", aggregation)
-        _chart_title_with_info("System Availability")
-        st.plotly_chart(_make_trend_chart(pivot, "System Availability", "Availability", pct=True), use_container_width=True)
-
-    st.divider()
-    st.markdown("#### Errors & Reliability")
-
-    if not df_incidents.empty:
-        pivot = _aggregate_pivot(df_incidents, "incident_count", aggregation)
-        _chart_title_with_info("Incident Count")
-        st.plotly_chart(_make_trend_chart(pivot, "Incident Count", "Count"), use_container_width=True)
-
-    if "packet_loss" in df_health.columns:
-        pivot = _aggregate_pivot(df_health, "packet_loss", aggregation)
-        _chart_title_with_info("Packet Loss")
-        st.plotly_chart(_make_trend_chart(pivot, "Packet Loss", "Packet Loss %", threshold=5.0, threshold_label="Target < 5%", pct=True), use_container_width=True)
-
-    if "mtbf_h" in df_health.columns:
-        pivot = _aggregate_pivot(df_health, "mtbf_h", aggregation)
-        _chart_title_with_info("MTBF (Mean Time Between Failures)")
-        st.plotly_chart(_make_trend_chart(pivot, "MTBF (Mean Time Between Failures)", "Hours"), use_container_width=True)
+    st.markdown("#### Reliability")
 
     if "mbbd" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "mbbd", aggregation)
         _chart_title_with_info("MBBD (Mean Bins Between Downtime)")
         st.plotly_chart(_make_trend_chart(pivot, "MBBD (Mean Bins Between Downtime)", "Bins"), use_container_width=True)
+
+    if "mtbf_h" in df_health.columns:
+        pivot = _aggregate_pivot(df_health, "mtbf_h", aggregation)
+        _chart_title_with_info("MTBF (Mean Time Between Failures)")
+        st.plotly_chart(_make_trend_chart(pivot, "MTBF (Mean Time Between Failures)", "Hours"), use_container_width=True)
 
 
 def _view_performance(date_from_str, date_to_str, aggregation):
@@ -1198,3 +1177,12 @@ def _view_bin_overview(date_from_str, date_to_str, aggregation):
                 legend=dict(orientation="h", yanchor="top", y=-0.25, xanchor="left", x=0),
             )
             st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+    with st.spinner("Loading packet loss..."):
+        df_health = _load_for_sites(query_system_health, date_from_str, date_to_str)
+    if not df_health.empty and "packet_loss" in df_health.columns:
+        pivot = _aggregate_pivot(df_health, "packet_loss", aggregation)
+        _chart_title_with_info("Packet Loss")
+        st.caption("Parked here temporarily — to be re-homed under an Access Point / network view.")
+        st.plotly_chart(_make_trend_chart(pivot, "Packet Loss", "Packet Loss %", threshold=5.0, threshold_label="Target < 5%", pct=True), use_container_width=True)
