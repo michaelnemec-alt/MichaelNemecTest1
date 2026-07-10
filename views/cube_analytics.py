@@ -386,8 +386,17 @@ def _compute_availability(df_uptime, df_port, df_robot, df_versions=None):
         sw = _compute_software(df_versions)
         if not sw.empty:
             merged = merged.merge(sw, on="site", how="left")
-    comp = [c for c in ["system_uptime_pct", "port_uptime_pct", "robot_uptime_pct", "software_pct"] if c in merged.columns]
-    merged["availability_pct"] = merged[comp].mean(axis=1)
+    weights = {
+        "system_uptime_pct": 40.0,
+        "port_uptime_pct": 25.0,
+        "robot_uptime_pct": 25.0,
+        "software_pct": 10.0,
+    }
+    comp = [c for c in weights if c in merged.columns]
+    w = pd.Series({c: weights[c] for c in comp})
+    vals = merged[comp]
+    wsum = vals.notna().mul(w, axis=1).sum(axis=1)
+    merged["availability_pct"] = vals.mul(w, axis=1).sum(axis=1) / wsum.where(wsum != 0)
     return merged
 
 
@@ -528,7 +537,8 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
 
     _title_with_info(
         "Availability KPI — All Sites",
-        "Availability KPI = mean of System uptime %, Port uptime %, Robot uptime %, Software %. "
+        "Availability KPI = weighted mean of System uptime % (40%), Port uptime % (25%), "
+        "Robot uptime % (25%), Software % (10%). "
         "System = running time ÷ total (uptime endpoint, recovery-adjusted). "
         "Port = port operational %. Robot = 100 − robot recovery/unavailable/service time. "
         "Software = share of the site's modules running the fleet-latest version. "
@@ -1188,8 +1198,8 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     _title_with_info(
         "OEE — All Sites",
         "OEE = Availability × Performance × Quality, per site. "
-        "Availability = composite Availability KPI (mean of System/Port/Robot uptime + "
-        "Software up-to-date %, see Availability KPI tab). Performance = composite Performance KPI (mean of three "
+        "Availability = composite Availability KPI (weighted mean: System 40% / Port 25% / "
+        "Robot 25% / Software 10%, see Availability KPI tab). Performance = composite Performance KPI (mean of three "
         "interaction sub-scores: utilisation-adjusted flow [robot working% vs 60% with user wait "
         "on picks/cat 1&2 excused when busy], waste time vs 0.1s, and config quality [digging vs 1 + "
         "bin reuse vs 6]; see Performance KPI tab). "
