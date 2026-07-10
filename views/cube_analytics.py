@@ -324,6 +324,8 @@ def render(selected_view="Overview & Health"):
             _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to)
         elif selected_view in ("Availability KPI", "Overview & Health"):
             _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to)
+        elif selected_view == "Performance KPI":
+            _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_to)
         elif selected_view in ("Error & Health Metrics", "Uptime metrics"):
             _view_error_health(date_from_str, date_to_str, aggregation)
         elif selected_view == "Performance":
@@ -501,6 +503,90 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     st.divider()
     csv_bytes = avail.to_csv(index=False).encode("utf-8")
     st.download_button("Download availability data", data=csv_bytes, file_name=f"availability_{dt_from}_{dt_to}.csv", mime="text/csv", key="dl_avail")
+
+
+def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_to):
+    with st.spinner("Loading performance..."):
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
+            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
+            f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
+        df_robot = f_robot.result()
+        df_health = f_health.result()
+        df_dig = f_dig.result()
+
+    perf = _compute_performance(df_robot, df_health, df_dig)
+    if perf.empty:
+        st.warning("No data returned for the selected date range.")
+        return
+
+    period_start, period_end, period_label = _period_window(aggregation)
+    period_df = perf[(perf["date"].dt.date >= period_start) & (perf["date"].dt.date <= period_end)]
+    if period_df.empty:
+        period_df = perf[perf["date"] == perf["date"].max()]
+        period_label += " (fallback: latest available)"
+
+    label_map = {
+        "robot_working_pct": "Robot Working %",
+        "avg_digging_depth": "Digging Depth",
+        "waste_time": "Waste Time (s)",
+        "performance_pct": "Performance KPI %",
+    }
+    present = [c for c in label_map if c in period_df.columns]
+    latest = period_df.groupby("site")[present].mean().reset_index()
+    latest["site"] = latest["site"].apply(_site_code)
+    latest = latest.rename(columns={"site": "Site", **label_map})
+    latest = latest.sort_values("Performance KPI %", ascending=False).reset_index(drop=True)
+
+    _title_with_info(
+        "Performance KPI — All Sites",
+        "Performance KPI = mean of three target-normalised scores: "
+        "robot working% vs 60% target, digging depth vs 1 target, waste time vs 0.1s target. "
+        "Each score hits 100 at (or beyond) target and scales down linearly. "
+        "This composite feeds the Performance term of OEE.",
+    )
+    _render_colored_table(
+        latest,
+        num_cols=list(label_map.values()),
+        color_funcs={"Performance KPI %": _color_availability},
+    )
+    st.caption(f"Period: {period_label}")
+
+    pivot = _aggregate_pivot(perf, "performance_pct", aggregation)
+    _chart_title_with_info("Performance KPI")
+    st.plotly_chart(_make_trend_chart(pivot, "Performance KPI", "Performance %", pct=True), use_container_width=True)
+
+    if "robot_working_pct" in perf.columns:
+        pivot = _aggregate_pivot(perf, "robot_working_pct", aggregation)
+        _chart_title_with_info(
+            "Robot Working %",
+            "Share of robot-time spent moving bins productively (robot-state). "
+            "Target 60%. Feeds the Performance KPI.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "Robot Working %", "Working %", threshold=60.0, threshold_label="Target 60%", pct=True), use_container_width=True)
+
+    if "avg_digging_depth" in perf.columns:
+        pivot = _aggregate_pivot(perf, "avg_digging_depth", aggregation)
+        _chart_title_with_info(
+            "Average Digging Depth",
+            "Average number of bins that had to be lifted to reach a requested bin "
+            "(bins-above endpoint), weighted by task count. Target 1. Lower is better. "
+            "Feeds the Performance KPI.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "Average Digging Depth", "Bins above", threshold=1.0, threshold_label="Target 1"), use_container_width=True)
+
+    if "waste_time" in perf.columns:
+        pivot = _aggregate_pivot(perf, "waste_time", aggregation)
+        _chart_title_with_info(
+            "Waste Time (system-level)",
+            "Average time a robot waits at the port before it can deliver its bin. "
+            "Target 0.1s. Lower is better. Feeds the Performance KPI.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.1, threshold_label="Target < 0.1s"), use_container_width=True)
+
+    st.divider()
+    csv_bytes = perf.to_csv(index=False).encode("utf-8")
+    st.download_button("Download performance data", data=csv_bytes, file_name=f"performance_{dt_from}_{dt_to}.csv", mime="text/csv", key="dl_perf_kpi")
 
 
 def _view_error_health(date_from_str, date_to_str, aggregation):

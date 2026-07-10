@@ -46,7 +46,7 @@ st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
 PAGES = ["Home", "Reporting & Data Tools *", "System OEE *"]
-OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Facility KPI *", "AutoStore system *"]
+OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Performance KPI", "Facility KPI *", "AutoStore system *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
 SYSTEM_KPI_VIEWS = ["Availability KPI", "Error & Health Metrics *"]
 ERROR_HEALTH_VIEWS = ["Uptime metrics", "Robots", "Ports", "Chargers", "System"]
@@ -193,6 +193,9 @@ elif selected == "System OEE *":
         else:
             logger.info("Rendering Error & Health sub-view: %s", error_health_view)
             render(error_health_view or "Uptime metrics")
+    elif oee_view == "Performance KPI":
+        from views.cube_analytics import render
+        render("Performance KPI")
     elif oee_view == "Facility KPI *":
         from views.cube_analytics import render
         logger.info("Rendering Facility Performance view: %s", facility_view)
