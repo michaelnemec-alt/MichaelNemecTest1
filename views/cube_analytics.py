@@ -620,7 +620,7 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
 
     label_map = {
         "robot_working_pct": "Robot Working %",
-        "user_wait": "User Wait (s)",
+        "user_wait": "Bin Wait (s)",
         "avg_digging_depth": "Digging Depth",
         "picks_per_bin": "Picks/Bin",
         "waste_time": "Waste Time (s)",
@@ -636,9 +636,9 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
     _title_with_info(
         "Performance KPI — All Sites",
         "Performance KPI = mean of four sub-scores. "
-        "① Utilisation-adjusted flow: robot working% (target 60%); high user wait is "
+        "① Utilisation-adjusted flow: robot working% (target 60%); high bin wait is "
         "excused when the system is busy (working% ≥ 60), penalised when it is not. "
-        "User wait is scoped to picks / category 1 & 2. "
+        "Bin wait is scoped to picks / category 1 & 2. "
         "② Waste time (system-level) vs 0.1s target. "
         "③ Config quality: mean of digging depth (target 1) and bin reuse (picks/bin vs 6). "
         "④ Bins outside: share of bins outside the grid vs < 1% target. "
@@ -669,12 +669,12 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
     if "user_wait" in perf.columns:
         pivot = _aggregate_pivot(perf, "user_wait", aggregation)
         _chart_title_with_info(
-            "User Wait Time (picks, cat 1 & 2)",
+            "Bin Wait Time (picks, cat 1 & 2)",
             "Average time the operator waits at the port for the next bin to arrive, "
             "scoped to picks / category 1 & 2. Target 2s. Lower is better. "
             "Pairs with robot working% in sub-score ① (excused when the system is busy).",
         )
-        st.plotly_chart(_make_trend_chart(pivot, "User Wait Time (picks, cat 1 & 2)", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
+        st.plotly_chart(_make_trend_chart(pivot, "Bin Wait Time (picks, cat 1 & 2)", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
 
     if "avg_digging_depth" in perf.columns:
         pivot = _aggregate_pivot(perf, "avg_digging_depth", aggregation)
