@@ -895,6 +895,26 @@ def _short_site(name):
     return s
 
 
+_SITE_CODES = {
+    "Garching Ambient": "MUC_AM",
+    "Garching Chilled": "MUC_CH",
+    "Praha (Chilled)": "PRG2_CH",
+    "Praha (Ambient)": "PRG2_AM",
+    "Schönefeld (Chilled)": "BER_CH",
+    "Schönefeld (Ambient)": "BER_AM",
+    "Vienna (Ambient)": "VIE_AM",
+    "Vienna (Chilled)": "VIE_CH",
+    "Biatorbágy (Chilled)": "BUD2_CH",
+    "Biatorbágy (Ambient)": "BUD2_AM",
+}
+
+
+def _site_code(name):
+    """Map a (possibly prefixed) site name to its short code, else the short name."""
+    short = _short_site(name)
+    return _SITE_CODES.get(short, short)
+
+
 def _version_key(value):
     """Comparable key for a version string (ignores trailing '*' / non-digits)."""
     parts = re.findall(r"\d+", str(value))
@@ -941,7 +961,7 @@ def _view_versions(date_from_str, date_to_str):
     table = latest.pivot_table(
         index="module", columns="site", values="version", aggfunc="first"
     )
-    table.columns = [_short_site(s) for s in table.columns]
+    table.columns = [_site_code(s) for s in table.columns]
     table = table.fillna("—")
 
     _title_with_info(
