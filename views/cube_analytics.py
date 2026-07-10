@@ -484,11 +484,6 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
     st.divider()
     st.markdown("#### Reliability")
 
-    if "mbbd" in df_health.columns:
-        pivot = _aggregate_pivot(df_health, "mbbd", aggregation)
-        _chart_title_with_info("MBBD (Mean Bins Between Downtime)")
-        st.plotly_chart(_make_trend_chart(pivot, "MBBD (Mean Bins Between Downtime)", "Bins"), use_container_width=True)
-
     if "mtbf_h" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "mtbf_h", aggregation)
         _chart_title_with_info("MTBF (Mean Time Between Failures)")
@@ -995,6 +990,18 @@ def _view_module_ports(date_from_str, date_to_str, aggregation):
         _chart_title_with_info("Port Utilization")
         st.plotly_chart(_make_trend_chart(pivot, "Port Utilization", "Utilization %", pct=True), use_container_width=True)
 
+    with st.spinner("Loading MBBD..."):
+        df_health = _load_for_sites(query_system_health, date_from_str, date_to_str)
+    if not df_health.empty and "mbbd" in df_health.columns:
+        st.divider()
+        pivot = _aggregate_pivot(df_health, "mbbd", aggregation)
+        _chart_title_with_info(
+            "MBBD (Mean Bins Between Downtime)",
+            "Bins processed per port-downtime period (mbbd_bin_count ÷ mbbd_port_downtime_count). "
+            "A port-level reliability metric — higher is better.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "MBBD (Mean Bins Between Downtime)", "Bins"), use_container_width=True)
+
 
 def _view_module_chargers(date_from_str, date_to_str, aggregation):
     st.markdown("#### Chargers")
@@ -1056,9 +1063,53 @@ def _view_facility_time_to_recover(date_from_str, date_to_str, aggregation):
     _render_recovery_metric("recover_manual", date_from_str, date_to_str, aggregation)
 
 
+def _bins_between_stops_pivot(df_bins, df_recovery, agg_mode, category=None):
+    """System-wide bins presented per system stop, per (site, period).
+
+    ratio = sum(bin_presentations) / count(system stops). If `category` is given
+    ('error_stop' | 'manual') only those stops count the denominator, else all
+    system stops. Periods with zero stops yield NaN (undefined) and drop out.
+    """
+    def _with_period(df):
+        df = df.copy()
+        if agg_mode == "Week":
+            df["period"] = df["date"].dt.to_period("W").dt.start_time
+        elif agg_mode == "Month":
+            df["period"] = df["date"].dt.to_period("M").dt.start_time
+        else:
+            df["period"] = df["date"]
+        return df
+
+    b = _with_period(df_bins[["site", "date", "bin_presentations"]])
+    r = df_recovery.copy()
+    r["date"] = pd.to_datetime(r["date"], errors="coerce")
+    if category is not None:
+        r = r[r["category"] == category]
+    r = _with_period(r[["site", "date"]].assign(stops=1))
+
+    if agg_mode in ("Week", "Month"):
+        cutoff = _current_period_start(agg_mode)
+        b = b[b["period"] < cutoff]
+        r = r[r["period"] < cutoff]
+
+    bins_sum = b.groupby(["site", "period"])["bin_presentations"].sum()
+    stops_sum = r.groupby(["site", "period"])["stops"].sum()
+    ratio = (bins_sum / stops_sum).replace([float("inf"), -float("inf")], pd.NA).dropna()
+    if ratio.empty:
+        return pd.DataFrame()
+    pivot = ratio.reset_index(name="mbbs").pivot(index="period", columns="site", values="mbbs").sort_index()
+    return _format_pivot_index(pivot, agg_mode)
+
+
 def _view_facility_reliability(date_from_str, date_to_str, aggregation):
     with st.spinner("Loading reliability data..."):
-        df_health = _load_for_sites(query_system_health, date_from_str, date_to_str)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
+            f_bins = pool.submit(_load_for_sites, query_bin_presentations, date_from_str, date_to_str)
+            f_recovery = pool.submit(_load_for_sites, query_recovery_times, date_from_str, date_to_str)
+        df_health = f_health.result()
+        df_bins = f_bins.result()
+        df_recovery = f_recovery.result()
 
     st.markdown("#### Reliability")
     if df_health.empty:
@@ -1070,10 +1121,28 @@ def _view_facility_reliability(date_from_str, date_to_str, aggregation):
         _chart_title_with_info("MTBF (Mean Time Between Failures)")
         st.plotly_chart(_make_trend_chart(pivot, "MTBF (Mean Time Between Failures)", "Hours"), use_container_width=True)
 
-    if "mbbd" in df_health.columns:
-        pivot = _aggregate_pivot(df_health, "mbbd", aggregation)
-        _chart_title_with_info("MBBD (Mean Bins Between Downtime)")
-        st.plotly_chart(_make_trend_chart(pivot, "MBBD (Mean Bins Between Downtime)", "Bins"), use_container_width=True)
+    if not df_bins.empty and not df_recovery.empty:
+        pivot = _bins_between_stops_pivot(df_bins, df_recovery, aggregation)
+        _chart_title_with_info(
+            "Bins Between Stops (system)",
+            "Whole-system reliability: bins presented ÷ number of system stops "
+            "(error-forced + manual). Counts actual system stops from the uptime "
+            "endpoint (not the ~200/day port downtimes used by MBBD). Higher is better.",
+        )
+        if pivot.empty:
+            st.info("No system stops in this range — bins-between-stops is undefined.")
+        else:
+            st.plotly_chart(_make_trend_chart(pivot, "Bins Between Stops (system)", "Bins / stop"), use_container_width=True)
+
+        pivot_err = _bins_between_stops_pivot(df_bins, df_recovery, aggregation, category="error_stop")
+        _chart_title_with_info(
+            "Bins Between Error Stops (system)",
+            "Bins presented ÷ number of error-forced system stops only.",
+        )
+        if pivot_err.empty:
+            st.info("No error stops in this range.")
+        else:
+            st.plotly_chart(_make_trend_chart(pivot_err, "Bins Between Error Stops (system)", "Bins / stop"), use_container_width=True)
 
 
 def _view_facility_incidents(date_from_str, date_to_str, aggregation):
