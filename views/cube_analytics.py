@@ -382,6 +382,46 @@ def _compute_availability(df_uptime, df_port, df_robot):
     return merged
 
 
+PERF_TARGET_DIGGING = 1.0
+PERF_TARGET_ROBOT_WORKING = 60.0
+PERF_TARGET_WASTE = 0.1
+
+
+def _compute_performance(df_robot, df_health, df_dig):
+    """Per (site, date) Performance KPI = mean of three target-normalised sub-scores.
+
+    - Robot working score  = min(working_pct / 60 × 100, 100)   (higher better)
+    - Digging depth score  = min(1.0 / avg_digging_depth × 100, 100)  (lower better)
+    - Waste time score     = min(0.1 / waste_time × 100, 100)   (lower better)
+    """
+    frames = []
+    if not df_robot.empty and "working_pct" in df_robot.columns:
+        r = df_robot[["site", "date"]].copy()
+        r["robot_working_pct"] = df_robot["working_pct"].values
+        r["working_score"] = (r["robot_working_pct"] / PERF_TARGET_ROBOT_WORKING * 100).clip(upper=100)
+        frames.append(r)
+    if not df_dig.empty and "avg_digging_depth" in df_dig.columns:
+        d = df_dig[["site", "date", "avg_digging_depth"]].copy()
+        d["digging_score"] = d["avg_digging_depth"].apply(
+            lambda v: 100.0 if pd.isna(v) or v <= 0 else min(PERF_TARGET_DIGGING / v * 100, 100)
+        )
+        frames.append(d)
+    if not df_health.empty and "waste_time" in df_health.columns:
+        w = df_health[["site", "date", "waste_time"]].copy()
+        w["waste_score"] = w["waste_time"].apply(
+            lambda v: 100.0 if pd.isna(v) or v <= 0 else min(PERF_TARGET_WASTE / v * 100, 100)
+        )
+        frames.append(w)
+    if not frames:
+        return pd.DataFrame()
+    merged = frames[0]
+    for f in frames[1:]:
+        merged = merged.merge(f, on=["site", "date"], how="outer")
+    score_cols = [c for c in ["working_score", "digging_score", "waste_score"] if c in merged.columns]
+    merged["performance_pct"] = merged[score_cols].mean(axis=1)
+    return merged
+
+
 def _period_window(aggregation):
     today = date.today()
     if aggregation == "Week":
@@ -548,13 +588,21 @@ def _view_performance(date_from_str, date_to_str, aggregation):
 
     if "wait_bin" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "wait_bin", agg_mode)
-        _chart_title_with_info("Wait Time (system-level)")
-        st.plotly_chart(_make_trend_chart(pivot, "Wait Time (system-level)", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
+        _chart_title_with_info(
+            "User Wait Time",
+            "Average time the operator waits at the port for the next bin to arrive "
+            "(system-level). Lower is better.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "User Wait Time", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
 
     if "waste_time" in df_health.columns:
         pivot = _aggregate_pivot(df_health, "waste_time", agg_mode)
-        _chart_title_with_info("Waste Time (system-level)")
-        st.plotly_chart(_make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.5, threshold_label="Target < 0.5s"), use_container_width=True)
+        _chart_title_with_info(
+            "Waste Time (system-level)",
+            "Average time a robot waits at the port before it can deliver its bin "
+            "(system-level). Feeds the Performance KPI; target 0.1s. Lower is better.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.1, threshold_label="Target < 0.1s"), use_container_width=True)
 
     if not df_dig.empty and "avg_digging_depth" in df_dig.columns:
         pivot = _aggregate_pivot(df_dig, "avg_digging_depth", agg_mode)
@@ -847,15 +895,19 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
 
 def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     with st.spinner("Loading OEE inputs..."):
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=6) as pool:
             f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
             f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
             f_recovery = pool.submit(_load_for_sites, query_recovery_times, date_from_str, date_to_str)
+            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
+            f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
         df_uptime = f_uptime.result()
         df_port = f_port.result()
         df_robot = f_robot.result()
         df_recovery = f_recovery.result()
+        df_health = f_health.result()
+        df_dig = f_dig.result()
 
     if df_uptime.empty or df_robot.empty:
         st.warning("No data returned for the selected date range.")
@@ -866,8 +918,10 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         st.warning("Not enough data to compute Availability.")
         return
 
-    pf = df_robot[["site", "date", "working_pct"]].copy()
-    pf = pf.rename(columns={"working_pct": "performance_pct"})
+    pf = _compute_performance(df_robot, df_health, df_dig)
+    if pf.empty:
+        st.warning("Not enough data to compute Performance.")
+        return
 
     if not df_recovery.empty:
         rec = df_recovery.copy()
@@ -921,8 +975,9 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         "OEE — All Sites",
         "OEE = Availability × Performance × Quality, per site. "
         "Availability = composite Availability KPI (mean of System/Port/Robot uptime, "
-        "see Availability KPI tab). Performance = share of robot-time spent working "
-        "(robot-state). Quality = share of stops that were NOT error-forced (uptime "
+        "see Availability KPI tab). Performance = composite Performance KPI (mean of three "
+        "target-normalised scores: robot working% vs 60%, digging depth vs 1, waste time vs 0.1s). "
+        "Quality = share of stops that were NOT error-forced (uptime "
         "stop codes); days with no stops count as 100%. Proxies pending official AutoStore targets.",
     )
     _render_colored_table(
