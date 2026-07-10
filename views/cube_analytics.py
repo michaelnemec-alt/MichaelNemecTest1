@@ -65,8 +65,8 @@ METRIC_INFO = {
 }
 
 
-def _chart_title_with_info(title):
-    _title_with_info(title, METRIC_INFO.get(title, "No description available."))
+def _chart_title_with_info(title, info=None):
+    _title_with_info(title, info if info is not None else METRIC_INFO.get(title, "No description available."))
 
 
 def _title_with_info(title, info):
