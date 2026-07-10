@@ -507,13 +507,15 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
 
 def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     with st.spinner("Loading performance..."):
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
+            f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
         df_robot = f_robot.result()
         df_health = f_health.result()
         df_dig = f_dig.result()
+        df_usage = f_usage.result()
 
     perf = _compute_performance(df_robot, df_health, df_dig)
     if perf.empty:
@@ -583,6 +585,16 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
             "Target 0.1s. Lower is better. Feeds the Performance KPI.",
         )
         st.plotly_chart(_make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.1, threshold_label="Target < 0.1s"), use_container_width=True)
+
+    if not df_usage.empty and "picks_per_bin" in df_usage.columns:
+        pivot = _aggregate_pivot(df_usage, "picks_per_bin", aggregation)
+        _chart_title_with_info(
+            "Bin Usage Efficiency (picks per bin, cat 1 & 2)",
+            "Category 1 & 2 picks ÷ distinct bins used. Higher = each bin is picked "
+            "more times before being stored away = better reuse and less digging. "
+            "Read together with digging depth: good config = low digging + high reuse.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "Bin Usage Efficiency (picks per bin, cat 1 & 2)", "Picks / bin"), use_container_width=True)
 
     st.divider()
     csv_bytes = perf.to_csv(index=False).encode("utf-8")
