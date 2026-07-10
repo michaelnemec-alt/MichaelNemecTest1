@@ -16,7 +16,7 @@ from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_robot_state, query_bin_presentations,
     query_port_wait_time_daily, query_port_uptime, query_incidents, query_robot_errors,
-    query_recovery_times, query_installation_data, query_module_versions,
+    query_recovery_times, query_installation_data, query_module_versions, query_bins_above,
 )
 
 SITE_COLORS = [
@@ -530,13 +530,15 @@ def _view_performance(date_from_str, date_to_str, aggregation):
         return df
 
     with st.spinner("Loading performance data..."):
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
+            f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
         df_health = _filter_weekday(f_health.result())
         df_pwt = _filter_weekday(f_pwt.result())
         df_robot = _filter_weekday(f_robot.result())
+        df_dig = _filter_weekday(f_dig.result())
 
     if df_health.empty:
         st.warning("No data returned.")
@@ -553,6 +555,16 @@ def _view_performance(date_from_str, date_to_str, aggregation):
         pivot = _aggregate_pivot(df_health, "waste_time", agg_mode)
         _chart_title_with_info("Waste Time (system-level)")
         st.plotly_chart(_make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.5, threshold_label="Target < 0.5s"), use_container_width=True)
+
+    if not df_dig.empty and "avg_digging_depth" in df_dig.columns:
+        pivot = _aggregate_pivot(df_dig, "avg_digging_depth", agg_mode)
+        _chart_title_with_info(
+            "Average Digging Depth",
+            "Average number of bins that had to be lifted to reach a requested bin "
+            "(bins-above endpoint), weighted by task count. Lower is better — it means "
+            "requested bins sit nearer the top of the grid.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "Average Digging Depth", "Bins above"), use_container_width=True)
 
     st.divider()
     st.markdown("**Filtered by Pick Type / Category**")

@@ -211,6 +211,40 @@ def query_bin_presentations(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=300)
+def query_bins_above(installation_id, date_from_str, date_to_str):
+    """Digging depth per day: average number of bins that had to be moved to
+    reach a requested bin. Weighted mean of the bins_above distribution.
+
+    avg_digging_depth        = Σ(bins_above × tasks) / total_tasks
+    avg_digging_depth_unique = Σ(bins_above × unique_tasks) / total_unique_tasks
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/bins-above/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        res = day_result.get("result", {})
+        dist = res.get("bins_above_list", []) or []
+        total_tasks = res.get("total_tasks", 0) or 0
+        total_unique = res.get("total_unique_tasks", 0) or 0
+        weighted = sum(b.get("bins_above", 0) * b.get("tasks", 0) for b in dist)
+        weighted_u = sum(b.get("bins_above", 0) * b.get("unique_tasks", 0) for b in dist)
+        rows.append({
+            "date": day_result.get("date"),
+            "avg_digging_depth": weighted / total_tasks if total_tasks else None,
+            "avg_digging_depth_unique": weighted_u / total_unique if total_unique else None,
+            "total_tasks": total_tasks,
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=300)
 def query_port_uptime(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/port-uptime/"
     params = {"after": date_from_str, "before": date_to_str}
