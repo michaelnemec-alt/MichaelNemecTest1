@@ -884,6 +884,13 @@ def render_autostore(selected_view="Versions of Systems"):
         st.error(f"Error loading view: {e}")
 
 
+def _short_site(name):
+    """Trim the leading numeric code and 'Rohlik-' prefix from a site name."""
+    s = re.sub(r"^\d+-", "", str(name))
+    s = re.sub(r"^Rohlik-", "", s)
+    return s
+
+
 def _version_key(value):
     """Comparable key for a version string (ignores trailing '*' / non-digits)."""
     parts = re.findall(r"\d+", str(value))
@@ -931,7 +938,7 @@ def _view_versions(date_from_str, date_to_str):
     table = latest.pivot_table(
         index="module", columns="site", values="version", aggfunc="first"
     )
-    table.columns = [s.split("-", 1)[-1] if "-" in s else s for s in table.columns]
+    table.columns = [_short_site(s) for s in table.columns]
     table = table.fillna("—")
 
     st.caption(
@@ -966,13 +973,13 @@ def _view_bin_overview(date_from_str, date_to_str, aggregation):
         latest[latest["type"] == "outside"].groupby("site")["count"].sum()
     )
     type_table["Outside"] = outside_now
-    type_table.index = [s.split("-", 1)[-1] if "-" in s else s for s in type_table.index]
+    type_table.index = [_short_site(s) for s in type_table.index]
     type_table.index.name = "Site"
     type_table = type_table.fillna(0).astype(int)
 
     df_out = df_bin[df_bin["type"] == "outside"][["date", "site", "count"]].copy()
 
-    col_table, col_chart = st.columns(2)
+    col_table, col_chart = st.columns([1, 1.3])
     with col_table:
         st.caption("Current bin count per site by bin type, incl. bins outside (latest snapshot in range).")
         _render_html_table(type_table)
