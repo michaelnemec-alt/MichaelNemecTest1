@@ -45,10 +45,10 @@ section[data-testid="stSidebar"] button {
 st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>", unsafe_allow_html=True)
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
-PAGES = ["Home", "Reporting & Data Tools *", "System OEE *", "AutoStore system *"]
+PAGES = ["Home", "Reporting & Data Tools *", "System OEE *"]
 OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Performance KPI", "Facility KPI *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
-SYSTEM_KPI_VIEWS = ["Availability KPI", "Error & Health Metrics *"]
+SYSTEM_KPI_VIEWS = ["Availability KPI", "Error & Health Metrics *", "AutoStore system *"]
 ERROR_HEALTH_VIEWS = ["Uptime metrics", "Robots", "Ports", "Chargers", "System"]
 FACILITY_VIEWS = ["Time to Recover", "Reliability", "Incidents"]
 AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
@@ -105,6 +105,14 @@ if selected == "System OEE *":
                 key="error_health_nav_selection",
                 label_visibility="collapsed",
             ) or "Uptime metrics"
+        elif system_view == "AutoStore system *":
+            autostore_view = st.segmented_control(
+                "autostore_nav",
+                options=AUTOSTORE_VIEWS,
+                default="Versions of Systems",
+                key="autostore_nav_selection",
+                label_visibility="collapsed",
+            ) or "Versions of Systems"
 
     elif oee_view == "Facility KPI *":
         facility_view = st.segmented_control(
@@ -114,15 +122,6 @@ if selected == "System OEE *":
             key="facility_nav_selection",
             label_visibility="collapsed",
         ) or "Time to Recover"
-
-if selected == "AutoStore system *":
-    autostore_view = st.segmented_control(
-        "autostore_nav",
-        options=AUTOSTORE_VIEWS,
-        default="Versions of Systems",
-        key="autostore_nav_selection",
-        label_visibility="collapsed",
-    ) or "Versions of Systems"
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -187,12 +186,17 @@ elif selected == "System OEE *":
         from views.cube_analytics import render
         render("OEE Overview")
     elif oee_view == "Availability KPI *":
-        from views.cube_analytics import render
-        if system_view == "Availability KPI":
-            render("Availability KPI")
+        if system_view == "AutoStore system *":
+            from views.cube_analytics import render_autostore
+            logger.info("Rendering AutoStore system view: %s", autostore_view or "Versions of Systems")
+            render_autostore(autostore_view or "Versions of Systems")
         else:
-            logger.info("Rendering Error & Health sub-view: %s", error_health_view)
-            render(error_health_view or "Uptime metrics")
+            from views.cube_analytics import render
+            if system_view == "Availability KPI":
+                render("Availability KPI")
+            else:
+                logger.info("Rendering Error & Health sub-view: %s", error_health_view)
+                render(error_health_view or "Uptime metrics")
     elif oee_view == "Performance KPI":
         from views.cube_analytics import render
         render("Performance KPI")
@@ -200,10 +204,5 @@ elif selected == "System OEE *":
         from views.cube_analytics import render
         logger.info("Rendering Facility Performance view: %s", facility_view)
         render(facility_view or "Time to Recover")
-
-elif selected == "AutoStore system *":
-    from views.cube_analytics import render_autostore
-    logger.info("Rendering AutoStore system view: %s", autostore_view or "Versions of Systems")
-    render_autostore(autostore_view or "Versions of Systems")
 
 st.markdown("<div class='footer'>Created by <b>Michael Nemec</b></div>", unsafe_allow_html=True)
