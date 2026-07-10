@@ -152,7 +152,7 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
     return fig
 
 
-_WEEKDAY_LABELS = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
+_WEEKDAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
 def _current_period_start(agg_mode):
@@ -166,12 +166,6 @@ def _current_period_start(agg_mode):
 
 def _aggregate_pivot(df, value_col, agg_mode):
     df = df.copy()
-    if agg_mode == "DayOfWeek":
-        df["period"] = df["date"].dt.dayofweek
-        grouped = df.groupby(["site", "period"])[value_col].mean().reset_index()
-        pivot = grouped.pivot(index="period", columns="site", values=value_col).sort_index()
-        pivot.index = pivot.index.map(_WEEKDAY_LABELS)
-        return pivot
     if agg_mode == "Week":
         df["period"] = df["date"].dt.to_period("W").dt.start_time
     elif agg_mode == "Month":
@@ -193,10 +187,6 @@ def _aggregate_pivot(df, value_col, agg_mode):
 
 
 def _format_pivot_index(pivot, mode):
-    if mode == "DayOfWeek":
-        pivot = pivot.sort_index()
-        pivot.index = pivot.index.map(_WEEKDAY_LABELS)
-        return pivot
     if mode in ("Week", "Month"):
         cutoff = _current_period_start(mode)
         pivot = pivot[pivot.index < cutoff]
@@ -492,21 +482,32 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
 
 def _view_performance(date_from_str, date_to_str, aggregation):
     with st.sidebar:
-        dow_mode = st.checkbox(
-            "Aggregate by day of week",
-            key="perf_dow",
-            help="Group the selected period by weekday (Mon–Sun) to focus on peak days. Overrides Day/Week/Month for this view.",
+        selected_weekdays = st.multiselect(
+            "Filter to weekday(s)",
+            _WEEKDAY_ORDER,
+            default=[],
+            key="perf_weekday",
+            placeholder="All days",
+            help="Show only the selected weekday(s), each date side by side "
+                 "(e.g. pick Fri to compare Friday-over-Friday). Overrides "
+                 "Day/Week/Month for this view.",
         )
-    agg_mode = "DayOfWeek" if dow_mode else aggregation
+    weekday_idx = [_WEEKDAY_ORDER.index(w) for w in selected_weekdays]
+    agg_mode = "Day" if weekday_idx else aggregation
+
+    def _filter_weekday(df):
+        if weekday_idx and not df.empty and "date" in df.columns:
+            return df[df["date"].dt.dayofweek.isin(weekday_idx)]
+        return df
 
     with st.spinner("Loading performance data..."):
         with ThreadPoolExecutor(max_workers=3) as pool:
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
-        df_health = f_health.result()
-        df_pwt = f_pwt.result()
-        df_robot = f_robot.result()
+        df_health = _filter_weekday(f_health.result())
+        df_pwt = _filter_weekday(f_pwt.result())
+        df_robot = _filter_weekday(f_robot.result())
 
     if df_health.empty:
         st.warning("No data returned.")
@@ -565,8 +566,6 @@ def _view_performance(date_from_str, date_to_str, aggregation):
                 wt["period"] = wt["date"].dt.to_period("W").dt.start_time
             elif agg_mode == "Month":
                 wt["period"] = wt["date"].dt.to_period("M").dt.start_time
-            elif agg_mode == "DayOfWeek":
-                wt["period"] = wt["date"].dt.dayofweek
             else:
                 wt["period"] = wt["date"]
             if agg_mode in ("Week", "Month"):
