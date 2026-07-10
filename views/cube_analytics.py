@@ -152,6 +152,9 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
     return fig
 
 
+_WEEKDAY_LABELS = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
+
+
 def _current_period_start(agg_mode):
     today = pd.Timestamp.today().normalize()
     if agg_mode == "Week":
@@ -163,6 +166,12 @@ def _current_period_start(agg_mode):
 
 def _aggregate_pivot(df, value_col, agg_mode):
     df = df.copy()
+    if agg_mode == "DayOfWeek":
+        df["period"] = df["date"].dt.dayofweek
+        grouped = df.groupby(["site", "period"])[value_col].mean().reset_index()
+        pivot = grouped.pivot(index="period", columns="site", values=value_col).sort_index()
+        pivot.index = pivot.index.map(_WEEKDAY_LABELS)
+        return pivot
     if agg_mode == "Week":
         df["period"] = df["date"].dt.to_period("W").dt.start_time
     elif agg_mode == "Month":
@@ -184,6 +193,10 @@ def _aggregate_pivot(df, value_col, agg_mode):
 
 
 def _format_pivot_index(pivot, mode):
+    if mode == "DayOfWeek":
+        pivot = pivot.sort_index()
+        pivot.index = pivot.index.map(_WEEKDAY_LABELS)
+        return pivot
     if mode in ("Week", "Month"):
         cutoff = _current_period_start(mode)
         pivot = pivot[pivot.index < cutoff]
@@ -478,6 +491,14 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
 
 
 def _view_performance(date_from_str, date_to_str, aggregation):
+    with st.sidebar:
+        dow_mode = st.checkbox(
+            "Aggregate by day of week",
+            key="perf_dow",
+            help="Group the selected period by weekday (Mon–Sun) to focus on peak days. Overrides Day/Week/Month for this view.",
+        )
+    agg_mode = "DayOfWeek" if dow_mode else aggregation
+
     with st.spinner("Loading performance data..."):
         with ThreadPoolExecutor(max_workers=3) as pool:
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
@@ -494,12 +515,12 @@ def _view_performance(date_from_str, date_to_str, aggregation):
     st.markdown("#### Performance")
 
     if "wait_bin" in df_health.columns:
-        pivot = _aggregate_pivot(df_health, "wait_bin", aggregation)
+        pivot = _aggregate_pivot(df_health, "wait_bin", agg_mode)
         _chart_title_with_info("Wait Time (system-level)")
         st.plotly_chart(_make_trend_chart(pivot, "Wait Time (system-level)", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
 
     if "waste_time" in df_health.columns:
-        pivot = _aggregate_pivot(df_health, "waste_time", aggregation)
+        pivot = _aggregate_pivot(df_health, "waste_time", agg_mode)
         _chart_title_with_info("Waste Time (system-level)")
         st.plotly_chart(_make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.5, threshold_label="Target < 0.5s"), use_container_width=True)
 
@@ -540,14 +561,16 @@ def _view_performance(date_from_str, date_to_str, aggregation):
             wt["w_wait_user"] = wt["average_wait_user"] * wt["count"]
             wt["w_waste"] = wt["average_waste_time"] * wt["count"]
 
-            if aggregation == "Week":
+            if agg_mode == "Week":
                 wt["period"] = wt["date"].dt.to_period("W").dt.start_time
-            elif aggregation == "Month":
+            elif agg_mode == "Month":
                 wt["period"] = wt["date"].dt.to_period("M").dt.start_time
+            elif agg_mode == "DayOfWeek":
+                wt["period"] = wt["date"].dt.dayofweek
             else:
                 wt["period"] = wt["date"]
-            if aggregation in ("Week", "Month"):
-                wt = wt[wt["period"] < _current_period_start(aggregation)]
+            if agg_mode in ("Week", "Month"):
+                wt = wt[wt["period"] < _current_period_start(agg_mode)]
 
             agg = wt.groupby(["site", "period"]).agg(
                 total_count=("count", "sum"),
@@ -565,24 +588,24 @@ def _view_performance(date_from_str, date_to_str, aggregation):
                 ("avg_waste", "Waste Time (filtered)", "Waste Time (s)", 0.5, "Target < 0.5s"),
             ]:
                 piv = agg.pivot(index="period", columns="site", values=metric).sort_index()
-                piv = _format_pivot_index(piv, aggregation)
+                piv = _format_pivot_index(piv, agg_mode)
                 _chart_title_with_info(label)
                 st.plotly_chart(_make_trend_chart(piv, label, ylabel, threshold=thresh, threshold_label=thresh_label), use_container_width=True)
 
             piv_count = agg.pivot(index="period", columns="site", values="total_count").sort_index()
-            piv_count = _format_pivot_index(piv_count, aggregation)
+            piv_count = _format_pivot_index(piv_count, agg_mode)
             _chart_title_with_info("Bin Presentations (filtered)")
             st.plotly_chart(_make_trend_chart(piv_count, "Bin Presentations (filtered)", "Count"), use_container_width=True)
     else:
         st.info("No port wait time data available.")
 
     if not df_robot.empty and "working_pct" in df_robot.columns:
-        pivot = _aggregate_pivot(df_robot, "working_pct", aggregation)
+        pivot = _aggregate_pivot(df_robot, "working_pct", agg_mode)
         _chart_title_with_info("Robot Working %")
         st.plotly_chart(_make_trend_chart(pivot, "Robot Working %", "% Working", pct=True), use_container_width=True)
 
     if not df_robot.empty and "robot_availability_pct" in df_robot.columns:
-        pivot = _aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
+        pivot = _aggregate_pivot(df_robot, "robot_availability_pct", agg_mode)
         _chart_title_with_info("Robot Availability")
         st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
 
