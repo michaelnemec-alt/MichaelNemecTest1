@@ -45,8 +45,11 @@ section[data-testid="stSidebar"] button {
 st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>", unsafe_allow_html=True)
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
-PAGES = ["Home", "Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "CUBE Analytics *", "AutoStore system *"]
-CUBE_VIEWS = ["Overview & Health", "Error & Health Metrics", "Performance", "Battery & Robots", "Health Index *"]
+PAGES = ["Home", "Reporting & Data Tools *", "System KPI overview *", "Facility Performance KPI *", "AutoStore system *"]
+REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
+SYSTEM_KPI_VIEWS = ["Overview & Health", "Error & Health Metrics *"]
+ERROR_HEALTH_VIEWS = ["Error & Health Metrics", "Robots", "Ports", "Chargers", "System"]
+FACILITY_VIEWS = ["Time to Recover", "Reliability", "Incidents"]
 AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
 
 selected = st.segmented_control(
@@ -60,16 +63,46 @@ selected = st.segmented_control(
 if not selected:
     selected = "Home"
 
-if selected == "CUBE Analytics *":
-    cube_view = st.segmented_control(
-        "cube_nav",
-        options=CUBE_VIEWS,
-        default="Overview & Health",
-        key="cube_nav_selection",
+reporting_view = None
+system_view = None
+error_health_view = None
+facility_view = None
+autostore_view = None
+
+if selected == "Reporting & Data Tools *":
+    reporting_view = st.segmented_control(
+        "reporting_nav",
+        options=REPORTING_VIEWS,
+        default="Prio vs Picking",
+        key="reporting_nav_selection",
         label_visibility="collapsed",
-    )
-    if not cube_view:
-        cube_view = "Overview & Health"
+    ) or "Prio vs Picking"
+
+if selected == "System KPI overview *":
+    system_view = st.segmented_control(
+        "system_kpi_nav",
+        options=SYSTEM_KPI_VIEWS,
+        default="Overview & Health",
+        key="system_kpi_nav_selection",
+        label_visibility="collapsed",
+    ) or "Overview & Health"
+    if system_view == "Error & Health Metrics *":
+        error_health_view = st.segmented_control(
+            "error_health_nav",
+            options=ERROR_HEALTH_VIEWS,
+            default="Error & Health Metrics",
+            key="error_health_nav_selection",
+            label_visibility="collapsed",
+        ) or "Error & Health Metrics"
+
+if selected == "Facility Performance KPI *":
+    facility_view = st.segmented_control(
+        "facility_nav",
+        options=FACILITY_VIEWS,
+        default="Time to Recover",
+        key="facility_nav_selection",
+        label_visibility="collapsed",
+    ) or "Time to Recover"
 
 if selected == "AutoStore system *":
     autostore_view = st.segmented_control(
@@ -78,9 +111,7 @@ if selected == "AutoStore system *":
         default="Versions of Systems",
         key="autostore_nav_selection",
         label_visibility="collapsed",
-    )
-    if not autostore_view:
-        autostore_view = "Versions of Systems"
+    ) or "Versions of Systems"
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -112,36 +143,46 @@ if selected == "Home":
     c1, c2 = st.columns(2)
     with c1:
         st.markdown("""<div class="section-card">
-            <div style="font-size:0.7em; text-transform:uppercase; letter-spacing:1px; color:#9ca3af; margin-bottom:8px;">Analysis Tools</div>
+            <div style="font-size:0.7em; text-transform:uppercase; letter-spacing:1px; color:#9ca3af; margin-bottom:8px;">Reporting & Data Tools</div>
             <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>Prio vs Picking</b><br><span style="color:#6b7280; font-size:0.85em;">Scatter plot of picking timeliness vs prioritization time</span></div>
             <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>UNIFY Pivot Ready</b><br><span style="color:#6b7280; font-size:0.85em;">Convert CubeAnalytics CSV to pivot-ready format</span></div>
-            <div style="padding:8px 0;"><b>Day Evaluation</b><br><span style="color:#6b7280; font-size:0.85em;">Shift decision support — plan vs actual, buffer assessment</span></div>
+            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>Day Evaluation</b><br><span style="color:#6b7280; font-size:0.85em;">Shift decision support — plan vs actual, buffer assessment</span></div>
+            <div style="padding:8px 0;"><b>Performance</b><br><span style="color:#6b7280; font-size:0.85em;">Wait/waste time & throughput, weekday comparison</span></div>
         </div>""", unsafe_allow_html=True)
     with c2:
         st.markdown("""<div class="section-card">
             <div style="font-size:0.7em; text-transform:uppercase; letter-spacing:1px; color:#9ca3af; margin-bottom:8px;">System Monitoring</div>
-            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>CUBE Analytics</b><br><span style="color:#6b7280; font-size:0.85em;">System health, uptime, performance across all sites</span></div>
-            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><span style="color:#6b7280; font-size:0.85em;">5 dashboard views with interactive Plotly charts</span></div>
-            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><span style="color:#6b7280; font-size:0.85em;">Data sources: CSV, CubeAnalytics API, Snowflake</span></div>
-            <div style="padding:8px 0;"><span style="color:#6b7280; font-size:0.85em;">10 AutoStore sites across 5 locations</span></div>
+            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>System KPI overview</b><br><span style="color:#6b7280; font-size:0.85em;">Availability & health per module (System, Robots, Ports, Chargers)</span></div>
+            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>Facility Performance KPI</b><br><span style="color:#6b7280; font-size:0.85em;">Time-to-recover, reliability (MTBF/MBBD), incidents</span></div>
+            <div style="padding:8px 0;"><b>AutoStore system</b><br><span style="color:#6b7280; font-size:0.85em;">Module versions & bin overview across 10 sites</span></div>
         </div>""", unsafe_allow_html=True)
 
-elif selected == "Prio vs Picking":
-    from views.prio_vs_picking import render
-    render()
+elif selected == "Reporting & Data Tools *":
+    if reporting_view == "Prio vs Picking":
+        from views.prio_vs_picking import render
+        render()
+    elif reporting_view == "UNIFY Pivot Ready":
+        from views.unify_pivot_ready import render
+        render()
+    elif reporting_view == "Day Evaluation":
+        from views.day_evaluation import render
+        render()
+    elif reporting_view == "Performance":
+        from views.cube_analytics import render
+        render("Performance")
 
-elif selected == "UNIFY Pivot Ready":
-    from views.unify_pivot_ready import render
-    render()
-
-elif selected == "Day Evaluation":
-    from views.day_evaluation import render
-    render()
-
-elif selected == "CUBE Analytics *":
+elif selected == "System KPI overview *":
     from views.cube_analytics import render
-    logger.info("Rendering CUBE Analytics view: %s", cube_view or "Overview & Health")
-    render(cube_view or "Overview & Health")
+    if system_view == "Overview & Health":
+        render("Overview & Health")
+    else:
+        logger.info("Rendering Error & Health sub-view: %s", error_health_view)
+        render(error_health_view or "Error & Health Metrics")
+
+elif selected == "Facility Performance KPI *":
+    from views.cube_analytics import render
+    logger.info("Rendering Facility Performance view: %s", facility_view)
+    render(facility_view or "Time to Recover")
 
 elif selected == "AutoStore system *":
     from views.cube_analytics import render_autostore

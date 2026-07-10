@@ -329,6 +329,20 @@ def render(selected_view="Overview & Health"):
             _view_battery_robots(date_from_str, date_to_str, aggregation)
         elif selected_view == "Health Index *":
             _view_health_index(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Robots":
+            _view_module_robots(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Ports":
+            _view_module_ports(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Chargers":
+            _view_module_chargers(date_from_str, date_to_str, aggregation)
+        elif selected_view == "System":
+            _view_module_system(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Time to Recover":
+            _view_facility_time_to_recover(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Reliability":
+            _view_facility_reliability(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Incidents":
+            _view_facility_incidents(date_from_str, date_to_str, aggregation)
         logger.info("=== render() completed successfully for '%s' ===", selected_view)
     except Exception as e:
         logger.error("=== render() CRASHED for '%s': %s ===", selected_view, e)
@@ -822,6 +836,168 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
             pivot_false = _aggregate_pivot_sum(df_robot_errors, "error_stopped_false", aggregation)
             _chart_title_with_info("Error Stopped System False")
             st.plotly_chart(_make_trend_chart(pivot_false, "Error Stopped System False", "Count"), use_container_width=True)
+
+
+def _view_module_robots(date_from_str, date_to_str, aggregation):
+    with st.spinner("Loading robot metrics..."):
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
+            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
+            f_errors = pool.submit(_load_for_sites, query_robot_errors, date_from_str, date_to_str)
+        df_robot = f_robot.result()
+        df_health = f_health.result()
+        df_robot_errors = f_errors.result()
+
+    st.markdown("#### Robots")
+    if df_robot.empty and df_health.empty:
+        st.warning("No robot data returned.")
+        return
+
+    if not df_robot.empty and "robot_availability_pct" in df_robot.columns:
+        pivot = _aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
+        _chart_title_with_info("Robot Availability")
+        st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "Availability %", pct=True), use_container_width=True)
+
+    if not df_robot.empty:
+        downtime_cols = ["recovery_pct", "unavailable_pct", "service_off_grid_pct", "service_on_grid_pct"]
+        available_cols = [c for c in downtime_cols if c in df_robot.columns]
+        if available_cols:
+            df_robot["robot_uptime_pct"] = 100.0 - df_robot[available_cols].sum(axis=1)
+            pivot = _aggregate_pivot(df_robot, "robot_uptime_pct", aggregation)
+            _chart_title_with_info("Robot Uptime")
+            st.plotly_chart(_make_trend_chart(pivot, "Robot Uptime", "Uptime %", pct=True), use_container_width=True)
+
+    if "average_battery_score" in df_health.columns:
+        pivot = _aggregate_pivot(df_health, "average_battery_score", aggregation)
+        _chart_title_with_info("Average Battery Score")
+        st.plotly_chart(_make_trend_chart(pivot, "Average Battery Score", "Score (1-5)"), use_container_width=True)
+
+    if not df_robot_errors.empty:
+        st.divider()
+        st.markdown("#### Robot Errors — Operations vs Facility")
+        pivot_ops_sum = _aggregate_pivot_sum(df_robot_errors, "ops_errors", aggregation)
+        pivot_fac_sum = _aggregate_pivot_sum(df_robot_errors, "facility_errors", aggregation)
+        pivot_total = _aggregate_pivot_sum(df_robot_errors, "total_errors", aggregation)
+        pivot_ops_pct = (pivot_ops_sum / pivot_total * 100).fillna(0)
+        _chart_title_with_info("Errors caused by Operations %")
+        st.plotly_chart(_make_trend_chart(pivot_ops_pct, "Errors caused by Operations %", "%", pct=True), use_container_width=True)
+        _chart_title_with_info("Errors caused by Operations")
+        st.plotly_chart(_make_trend_chart(pivot_ops_sum, "Errors caused by Operations", "Count"), use_container_width=True)
+        _chart_title_with_info("Errors caused by Facility")
+        st.plotly_chart(_make_trend_chart(pivot_fac_sum, "Errors caused by Facility", "Count"), use_container_width=True)
+
+
+def _view_module_ports(date_from_str, date_to_str, aggregation):
+    with st.spinner("Loading port metrics..."):
+        df_port = _load_for_sites(query_port_uptime, date_from_str, date_to_str)
+
+    st.markdown("#### Ports")
+    if df_port.empty:
+        st.warning("No port data returned.")
+        return
+
+    pivot = _aggregate_pivot(df_port, "uptime_pct", aggregation)
+    _chart_title_with_info("Port Uptime")
+    st.plotly_chart(_make_trend_chart(pivot, "Port Uptime", "Uptime %", pct=True), use_container_width=True)
+
+    if "utilization_pct" in df_port.columns:
+        pivot = _aggregate_pivot(df_port, "utilization_pct", aggregation)
+        _chart_title_with_info("Port Utilization")
+        st.plotly_chart(_make_trend_chart(pivot, "Port Utilization", "Utilization %", pct=True), use_container_width=True)
+
+
+def _view_module_chargers(date_from_str, date_to_str, aggregation):
+    st.markdown("#### Chargers")
+    st.info(
+        "The API exposes no charger availability/uptime figure. `R5-chargers` / `r5-1-charger` "
+        "carry per-charger usage, robot interactions and bad-battery/chargehouse flags — wiring "
+        "those into first-party charger metrics (charge sessions, charger errors, capacity) is the "
+        "next step. For now the closest available signal is robot time spent charging (from robot-state)."
+    )
+    with st.spinner("Loading charging proxy..."):
+        df_robot = _load_for_sites(query_robot_state, date_from_str, date_to_str)
+    if not df_robot.empty and "charging_available_pct" in df_robot.columns:
+        pivot = _aggregate_pivot(df_robot, "charging_available_pct", aggregation)
+        _chart_title_with_info("Robot Charging (available) %")
+        st.plotly_chart(_make_trend_chart(pivot, "Robot Charging (available) %", "% of robot-time", pct=True), use_container_width=True)
+
+
+def _view_module_system(date_from_str, date_to_str, aggregation):
+    with st.spinner("Loading system metrics..."):
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
+            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
+            f_incidents = pool.submit(_load_for_sites, query_incidents, date_from_str, date_to_str)
+        df_uptime = f_uptime.result()
+        df_health = f_health.result()
+        df_incidents = f_incidents.result()
+
+    st.markdown("#### System")
+    if df_uptime.empty and df_health.empty:
+        st.warning("No system data returned.")
+        return
+
+    if not df_uptime.empty:
+        df_uptime["system_uptime_pct"] = df_uptime["recovery_up_ratio"] * 100
+        pivot = _aggregate_pivot(df_uptime, "system_uptime_pct", aggregation)
+        _chart_title_with_info("System Uptime")
+        st.plotly_chart(_make_trend_chart(pivot, "System Uptime", "Uptime", threshold=99.7, threshold_label="Target 99.7%", pct=True), use_container_width=True)
+
+        df_uptime["system_availability_pct"] = df_uptime["up_ratio"] * 100
+        pivot = _aggregate_pivot(df_uptime, "system_availability_pct", aggregation)
+        _chart_title_with_info("System Availability")
+        st.plotly_chart(_make_trend_chart(pivot, "System Availability", "Availability", pct=True), use_container_width=True)
+
+    if not df_health.empty and "packet_loss" in df_health.columns:
+        pivot = _aggregate_pivot(df_health, "packet_loss", aggregation)
+        _chart_title_with_info("Packet Loss")
+        st.plotly_chart(_make_trend_chart(pivot, "Packet Loss", "Packet Loss %", threshold=5.0, threshold_label="Target < 5%", pct=True), use_container_width=True)
+
+    if not df_incidents.empty:
+        pivot = _aggregate_pivot(df_incidents, "incident_count", aggregation)
+        _chart_title_with_info("Incident Count")
+        st.plotly_chart(_make_trend_chart(pivot, "Incident Count", "Count"), use_container_width=True)
+
+
+def _view_facility_time_to_recover(date_from_str, date_to_str, aggregation):
+    st.markdown("#### Time to Recover")
+    _render_recovery_metric("recover_error", date_from_str, date_to_str, aggregation)
+    st.divider()
+    _render_recovery_metric("recover_manual", date_from_str, date_to_str, aggregation)
+
+
+def _view_facility_reliability(date_from_str, date_to_str, aggregation):
+    with st.spinner("Loading reliability data..."):
+        df_health = _load_for_sites(query_system_health, date_from_str, date_to_str)
+
+    st.markdown("#### Reliability")
+    if df_health.empty:
+        st.warning("No data returned.")
+        return
+
+    if "mtbf_h" in df_health.columns:
+        pivot = _aggregate_pivot(df_health, "mtbf_h", aggregation)
+        _chart_title_with_info("MTBF (Mean Time Between Failures)")
+        st.plotly_chart(_make_trend_chart(pivot, "MTBF (Mean Time Between Failures)", "Hours"), use_container_width=True)
+
+    if "mbbd" in df_health.columns:
+        pivot = _aggregate_pivot(df_health, "mbbd", aggregation)
+        _chart_title_with_info("MBBD (Mean Bins Between Downtime)")
+        st.plotly_chart(_make_trend_chart(pivot, "MBBD (Mean Bins Between Downtime)", "Bins"), use_container_width=True)
+
+
+def _view_facility_incidents(date_from_str, date_to_str, aggregation):
+    with st.spinner("Loading incidents..."):
+        df_incidents = _load_for_sites(query_incidents, date_from_str, date_to_str)
+
+    st.markdown("#### Incidents")
+    if df_incidents.empty:
+        st.warning("No incident data returned.")
+        return
+
+    pivot = _aggregate_pivot(df_incidents, "incident_count", aggregation)
+    _chart_title_with_info("Incident Count")
+    st.plotly_chart(_make_trend_chart(pivot, "Incident Count", "Count"), use_container_width=True)
 
 
 AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
