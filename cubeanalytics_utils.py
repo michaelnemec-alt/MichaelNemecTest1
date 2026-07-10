@@ -245,6 +245,49 @@ def query_bins_above(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=300)
+def query_bin_usage(installation_id, date_from_str, date_to_str):
+    """Bin-usage efficiency for category 1 & 2 picks, per day.
+
+    picks         = number of category-1/2 pick presentations
+    unique_bins   = distinct task-groups presented (proxy for distinct bins —
+                    the daily API exposes no bin_id; task-group is the finest
+                    per-bin identifier available in port-bin-wait-time)
+    picks_per_bin = picks / unique_bins (higher = better bin reuse, less digging)
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/port-bin-wait-time/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        port_data = day_result.get("result", {}).get("port_hour_wait_time", {})
+        picks = 0
+        bins = set()
+        for records in port_data.values():
+            for rec in records:
+                if rec.get("subtype") != "BIN_PRESENTATIONS" or rec.get("pick_type") != "picks":
+                    continue
+                if rec.get("category") not in (1, 2):
+                    continue
+                picks += rec.get("count", 0) or 0
+                tg = rec.get("taskgroup")
+                if tg is not None:
+                    bins.add(tg)
+        rows.append({
+            "date": day_result.get("date"),
+            "picks": picks,
+            "unique_bins": len(bins),
+            "picks_per_bin": picks / len(bins) if bins else None,
+        })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=300)
 def query_port_uptime(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/port-uptime/"
     params = {"after": date_from_str, "before": date_to_str}

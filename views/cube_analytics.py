@@ -17,6 +17,7 @@ from cubeanalytics_utils import (
     query_system_health, query_uptime, query_robot_state, query_bin_presentations,
     query_port_wait_time_daily, query_port_uptime, query_incidents, query_robot_errors,
     query_recovery_times, query_installation_data, query_module_versions, query_bins_above,
+    query_bin_usage,
 )
 
 SITE_COLORS = [
@@ -570,15 +571,17 @@ def _view_performance(date_from_str, date_to_str, aggregation):
         return df
 
     with st.spinner("Loading performance data..."):
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=5) as pool:
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
             f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
+            f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
         df_health = _filter_weekday(f_health.result())
         df_pwt = _filter_weekday(f_pwt.result())
         df_robot = _filter_weekday(f_robot.result())
         df_dig = _filter_weekday(f_dig.result())
+        df_usage = _filter_weekday(f_usage.result())
 
     if df_health.empty:
         st.warning("No data returned.")
@@ -613,6 +616,31 @@ def _view_performance(date_from_str, date_to_str, aggregation):
             "requested bins sit nearer the top of the grid.",
         )
         st.plotly_chart(_make_trend_chart(pivot, "Average Digging Depth", "Bins above"), use_container_width=True)
+
+    if not df_usage.empty and "picks_per_bin" in df_usage.columns:
+        pivot = _aggregate_pivot(df_usage, "picks_per_bin", agg_mode)
+        _chart_title_with_info(
+            "Bin Usage Efficiency (picks per bin, cat 1 & 2)",
+            "Category 1 & 2 picks ÷ distinct bins used. Higher = each bin is picked "
+            "more times before being stored away = better reuse and less digging. "
+            "Distinct bins are counted by task-group (the daily API exposes no bin_id).",
+        )
+        st.plotly_chart(_make_trend_chart(pivot, "Bin Usage Efficiency (picks per bin, cat 1 & 2)", "Picks / bin"), use_container_width=True)
+
+        pivot_p = _aggregate_pivot_sum(df_usage, "picks", agg_mode)
+        _chart_title_with_info(
+            "Picks (cat 1 & 2)",
+            "Total category 1 & 2 pick presentations in the period.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot_p, "Picks (cat 1 & 2)", "Picks"), use_container_width=True)
+
+        pivot_b = _aggregate_pivot_sum(df_usage, "unique_bins", agg_mode)
+        _chart_title_with_info(
+            "Unique Bins Used (cat 1 & 2)",
+            "Distinct bins (task-groups) presented for category 1 & 2 picks. "
+            "For Week/Month this sums the daily distinct-bin counts.",
+        )
+        st.plotly_chart(_make_trend_chart(pivot_b, "Unique Bins Used (cat 1 & 2)", "Bins"), use_container_width=True)
 
     st.divider()
     st.markdown("**Filtered by Pick Type / Category**")
