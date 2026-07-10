@@ -66,7 +66,10 @@ METRIC_INFO = {
 
 
 def _chart_title_with_info(title):
-    info = METRIC_INFO.get(title, "No description available.")
+    _title_with_info(title, METRIC_INFO.get(title, "No description available."))
+
+
+def _title_with_info(title, info):
     info_escaped = info.replace('"', '&quot;').replace("'", "&#39;").replace("\n", "<br>")
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:-8px;">'
@@ -980,9 +983,12 @@ def _view_bin_overview(date_from_str, date_to_str, aggregation):
 
     df_out = df_bin[df_bin["type"] == "outside"][["date", "site", "count"]].copy()
 
-    col_table, col_chart = st.columns([1, 1.3])
+    col_table, col_chart = st.columns([1, 2.4], gap="small")
     with col_table:
-        st.caption("Current bin count per site by bin type, incl. bins outside (latest snapshot in range).")
+        _title_with_info(
+            "Bin inventory",
+            "Current bin count per site by bin type, incl. bins outside (latest snapshot in range).",
+        )
         _render_html_table(type_table)
     with col_chart:
         _chart_title_with_info("Bins Outside")
