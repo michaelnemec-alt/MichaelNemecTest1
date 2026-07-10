@@ -430,32 +430,62 @@ def query_recovery_times(installation_id, date_from_str, date_to_str):
 
 @st.cache_data(ttl=300)
 def query_port_wait_time_daily(installation_id, date_from_str, date_to_str):
+    """Port bin-wait-time collapsed to one row per (date, port, pick type, category).
+
+    The API returns hourly records; over long ranges that is hundreds of thousands
+    of rows per site, which exhausts memory when several sites load at once. We
+    aggregate the hourly records to daily on the fly (count-weighted averages,
+    identical to the downstream aggregation) so only the compact daily grain is
+    retained. Full hourly detail remains available via query_port_wait_time().
+    """
     url = f"{BASE_URL}/installations/{installation_id}/port-bin-wait-time/"
     params = {"after": date_from_str, "before": date_to_str}
     results = _fetch_all_pages(url, params)
 
-    rows = []
+    # key -> [count, sum(wait_bin*count), sum(wait_user*count), sum(waste*count)]
+    agg = {}
     for day_result in results:
         date_str = day_result.get("date")
         port_data = day_result.get("result", {}).get("port_hour_wait_time", {})
         for port_id_str, records in port_data.items():
+            port_id = int(port_id_str)
             for rec in records:
                 if rec.get("subtype") != "BIN_PRESENTATIONS":
                     continue
                 cat = rec.get("category")
-                rows.append({
-                    "date": date_str,
-                    "port_id": int(port_id_str),
-                    "pick_type": rec.get("pick_type", ""),
-                    "category": str(int(cat)) if cat is not None else "",
-                    "count": rec.get("count", 0),
-                    "average_wait_bin": rec.get("average_wait_bin", 0),
-                    "average_wait_user": rec.get("average_wait_user", 0),
-                    "average_waste_time": rec.get("average_waste_time", 0),
-                })
+                key = (
+                    date_str,
+                    port_id,
+                    rec.get("pick_type", ""),
+                    str(int(cat)) if cat is not None else "",
+                )
+                count = rec.get("count", 0) or 0
+                slot = agg.get(key)
+                if slot is None:
+                    slot = [0, 0.0, 0.0, 0.0]
+                    agg[key] = slot
+                slot[0] += count
+                slot[1] += rec.get("average_wait_bin", 0) * count
+                slot[2] += rec.get("average_wait_user", 0) * count
+                slot[3] += rec.get("average_waste_time", 0) * count
 
-    if not rows:
+    if not agg:
         return pd.DataFrame()
+
+    rows = []
+    for (date_str, port_id, pick_type, category), (count, w_bin, w_user, w_waste) in agg.items():
+        denom = count if count else 1
+        rows.append({
+            "date": date_str,
+            "port_id": port_id,
+            "pick_type": pick_type,
+            "category": category,
+            "count": count,
+            "average_wait_bin": w_bin / denom,
+            "average_wait_user": w_user / denom,
+            "average_waste_time": w_waste / denom,
+        })
+
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
