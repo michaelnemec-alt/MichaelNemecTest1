@@ -962,18 +962,24 @@ def _view_bin_overview(date_from_str, date_to_str, aggregation):
     type_table = latest[latest["type"] != "outside"].pivot_table(
         index="site", columns="type", values="count", aggfunc="sum"
     )
+    outside_now = (
+        latest[latest["type"] == "outside"].groupby("site")["count"].sum()
+    )
+    type_table["Outside"] = outside_now
     type_table.index = [s.split("-", 1)[-1] if "-" in s else s for s in type_table.index]
     type_table.index.name = "Site"
     type_table = type_table.fillna(0).astype(int)
-    st.caption("Current bin count per site by bin type (latest snapshot in range).")
-    _render_html_table(type_table)
-
-    st.divider()
 
     df_out = df_bin[df_bin["type"] == "outside"][["date", "site", "count"]].copy()
-    _chart_title_with_info("Bins Outside")
-    if df_out.empty:
-        st.info("No bins-outside data in this range.")
-        return
-    pivot = _aggregate_pivot(df_out, "count", aggregation)
-    st.plotly_chart(_make_trend_chart(pivot, "Bins Outside", "Bins outside"), use_container_width=True)
+
+    col_table, col_chart = st.columns(2)
+    with col_table:
+        st.caption("Current bin count per site by bin type, incl. bins outside (latest snapshot in range).")
+        _render_html_table(type_table)
+    with col_chart:
+        _chart_title_with_info("Bins Outside")
+        if df_out.empty:
+            st.info("No bins-outside data in this range.")
+        else:
+            pivot = _aggregate_pivot(df_out, "count", aggregation)
+            st.plotly_chart(_make_trend_chart(pivot, "Bins Outside", "Bins outside"), use_container_width=True)
