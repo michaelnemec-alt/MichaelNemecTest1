@@ -48,7 +48,7 @@ st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-
 PAGES = ["Home", "Reporting & Data Tools *", "System OEE *"]
 OEE_VIEWS = ["OEE Overview", "System KPI overview *", "Facility Performance KPI *", "AutoStore system *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
-SYSTEM_KPI_VIEWS = ["Overview & Health", "Error & Health Metrics *"]
+SYSTEM_KPI_VIEWS = ["Availability KPI", "Error & Health Metrics *"]
 ERROR_HEALTH_VIEWS = ["Uptime metrics", "Robots", "Ports", "Chargers", "System"]
 FACILITY_VIEWS = ["Time to Recover", "Reliability", "Incidents"]
 AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
@@ -93,10 +93,10 @@ if selected == "System OEE *":
         system_view = st.segmented_control(
             "system_kpi_nav",
             options=SYSTEM_KPI_VIEWS,
-            default="Overview & Health",
+            default="Availability KPI",
             key="system_kpi_nav_selection",
             label_visibility="collapsed",
-        ) or "Overview & Health"
+        ) or "Availability KPI"
         if system_view == "Error & Health Metrics *":
             error_health_view = st.segmented_control(
                 "error_health_nav",
@@ -188,8 +188,8 @@ elif selected == "System OEE *":
         render("OEE Overview")
     elif oee_view == "System KPI overview *":
         from views.cube_analytics import render
-        if system_view == "Overview & Health":
-            render("Overview & Health")
+        if system_view == "Availability KPI":
+            render("Availability KPI")
         else:
             logger.info("Rendering Error & Health sub-view: %s", error_health_view)
             render(error_health_view or "Uptime metrics")

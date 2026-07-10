@@ -321,7 +321,7 @@ def render(selected_view="Overview & Health"):
     try:
         if selected_view == "OEE Overview":
             _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to)
-        elif selected_view == "Overview & Health":
+        elif selected_view in ("Availability KPI", "Overview & Health"):
             _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to)
         elif selected_view in ("Error & Health Metrics", "Uptime metrics"):
             _view_error_health(date_from_str, date_to_str, aggregation)
@@ -352,95 +352,114 @@ def render(selected_view="Overview & Health"):
         st.error(f"Error loading view: {e}")
 
 
-def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
-    with st.spinner("Loading system health..."):
-        df_health = _load_for_sites(query_system_health, date_from_str, date_to_str)
+def _compute_availability(df_uptime, df_port, df_robot):
+    """Per (site, date) System/Port/Robot uptime % and their mean = Availability KPI.
 
-    if df_health.empty:
+    - System uptime % = uptime recovery_up_ratio × 100
+    - Port uptime %   = port-uptime uptime_pct
+    - Robot uptime %  = 100 − robot recovery/unavailable/service states
+    """
+    frames = []
+    if not df_uptime.empty and "recovery_up_ratio" in df_uptime.columns:
+        u = df_uptime[["site", "date"]].copy()
+        u["system_uptime_pct"] = df_uptime["recovery_up_ratio"].values * 100
+        frames.append(u)
+    if not df_port.empty and "uptime_pct" in df_port.columns:
+        frames.append(df_port[["site", "date", "uptime_pct"]].rename(columns={"uptime_pct": "port_uptime_pct"}))
+    if not df_robot.empty:
+        down = [c for c in ["recovery_pct", "unavailable_pct", "service_off_grid_pct", "service_on_grid_pct"] if c in df_robot.columns]
+        if down:
+            r = df_robot[["site", "date"]].copy()
+            r["robot_uptime_pct"] = 100.0 - df_robot[down].sum(axis=1).values
+            frames.append(r)
+    if not frames:
+        return pd.DataFrame()
+    merged = frames[0]
+    for f in frames[1:]:
+        merged = merged.merge(f, on=["site", "date"], how="outer")
+    comp = [c for c in ["system_uptime_pct", "port_uptime_pct", "robot_uptime_pct"] if c in merged.columns]
+    merged["availability_pct"] = merged[comp].mean(axis=1)
+    return merged
+
+
+def _period_window(aggregation):
+    today = date.today()
+    if aggregation == "Week":
+        end = today - timedelta(days=today.isoweekday())
+        start = end - timedelta(days=6)
+        return start, end, f"W{start.isocalendar()[1]} ({start} — {end})"
+    if aggregation == "Month":
+        first = today.replace(day=1)
+        end = first - timedelta(days=1)
+        return end.replace(day=1), end, end.strftime("%B %Y")
+    start = today - timedelta(days=1)
+    return start, start, start.strftime("%Y-%m-%d")
+
+
+def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
+    with st.spinner("Loading availability..."):
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
+            f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
+            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
+        df_uptime = f_uptime.result()
+        df_port = f_port.result()
+        df_robot = f_robot.result()
+
+    avail = _compute_availability(df_uptime, df_port, df_robot)
+    if avail.empty:
         st.warning("No data returned for the selected date range.")
         return
 
-    today = date.today()
-    if aggregation == "Week":
-        period_end = today - timedelta(days=today.isoweekday())
-        period_start = period_end - timedelta(days=6)
-        period_label = f"W{period_start.isocalendar()[1]} ({period_start} — {period_end})"
-    elif aggregation == "Month":
-        first_of_month = today.replace(day=1)
-        period_end = first_of_month - timedelta(days=1)
-        period_start = period_end.replace(day=1)
-        period_label = period_start.strftime("%B %Y")
-    else:
-        period_start = today - timedelta(days=1)
-        period_end = period_start
-        period_label = period_start.strftime("%Y-%m-%d")
-
-    period_df = df_health[
-        (df_health["date"].dt.date >= period_start) & (df_health["date"].dt.date <= period_end)
-    ]
+    period_start, period_end, period_label = _period_window(aggregation)
+    period_df = avail[(avail["date"].dt.date >= period_start) & (avail["date"].dt.date <= period_end)]
     if period_df.empty:
-        period_df = df_health[df_health["date"] == df_health["date"].max()]
+        period_df = avail[avail["date"] == avail["date"].max()]
         period_label += " (fallback: latest available)"
 
-    metrics = ["health_index", "uptime", "wait_bin", "waste_time",
-               "average_battery_score", "mtbf_h", "packet_loss", "mbbd"]
-    latest = period_df.groupby("site")[metrics].mean().reset_index()
-    latest.columns = ["Site", "Health", "Uptime %", "Wait (s)", "Waste (s)", "Battery", "MTBF (h)", "Pkt Loss %", "MBBD"]
-    latest = latest.sort_values("Health", ascending=False).reset_index(drop=True)
+    label_map = {
+        "system_uptime_pct": "System %",
+        "port_uptime_pct": "Port %",
+        "robot_uptime_pct": "Robot %",
+        "availability_pct": "Availability KPI %",
+    }
+    present = [c for c in label_map if c in period_df.columns]
+    latest = period_df.groupby("site")[present].mean().reset_index()
+    latest["site"] = latest["site"].apply(_site_code)
+    latest = latest.rename(columns={"site": "Site", **label_map})
+    latest = latest.sort_values("Availability KPI %", ascending=False).reset_index(drop=True)
 
-    st.markdown(f"#### Health — All Sites")
-
-    latest["Health"] = latest["Health"].round(2)
-    latest["Uptime %"] = latest["Uptime %"].round(2)
-    latest["Wait (s)"] = latest["Wait (s)"].round(1)
-    latest["Waste (s)"] = latest["Waste (s)"].round(2)
-    latest["Battery"] = latest["Battery"].round(2)
-    latest["MTBF (h)"] = latest["MTBF (h)"].apply(lambda x: int(x) if pd.notna(x) else None)
-    latest["Pkt Loss %"] = latest["Pkt Loss %"].round(2)
-    latest["MBBD"] = latest["MBBD"].apply(lambda x: int(x) if pd.notna(x) else None)
-
-    def _color_health(val):
-        if pd.isna(val):
-            return ""
-        if val >= 4.5:
-            return "background-color: #c6efce"
-        if val >= 3.5:
-            return "background-color: #ffeb9c"
-        return "background-color: #ffc7ce"
-
-    def _color_uptime(val):
-        if pd.isna(val):
-            return ""
-        if val >= 99.9:
-            return "background-color: #c6efce"
-        if val >= 99.0:
-            return "background-color: #ffeb9c"
-        return "background-color: #ffc7ce"
-
-    styled = (latest.style
-        .map(_color_health, subset=["Health"])
-        .map(_color_uptime, subset=["Uptime %"])
-        .format({
-            "Health": "{:.2f}",
-            "Uptime %": "{:.2f}",
-            "Wait (s)": "{:.1f}",
-            "Waste (s)": "{:.2f}",
-            "Battery": "{:.2f}",
-            "MTBF (h)": lambda x: str(int(x)) if pd.notna(x) else "None",
-            "Pkt Loss %": "{:.2f}",
-            "MBBD": lambda x: str(int(x)) if pd.notna(x) else "None",
-        })
+    _title_with_info(
+        "Availability KPI — All Sites",
+        "Availability KPI = mean of System uptime %, Port uptime %, Robot uptime %. "
+        "System = running time ÷ total (uptime endpoint, recovery-adjusted). "
+        "Port = port operational %. Robot = 100 − robot recovery/unavailable/service time. "
+        "This composite feeds the Availability term of OEE.",
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    _render_colored_table(
+        latest,
+        num_cols=list(label_map.values()),
+        color_funcs={"Availability KPI %": _color_availability},
+    )
     st.caption(f"Period: {period_label}")
 
-    pivot = _aggregate_pivot(df_health, "health_index", aggregation)
-    _chart_title_with_info("Health Index")
-    st.plotly_chart(_make_trend_chart(pivot, "Health Index", "Index (1-5)", threshold=4.0, threshold_label="Target >= 4.0"), use_container_width=True)
+    pivot = _aggregate_pivot(avail, "availability_pct", aggregation)
+    _chart_title_with_info("Availability KPI")
+    st.plotly_chart(_make_trend_chart(pivot, "Availability KPI", "Availability %", pct=True), use_container_width=True)
+
+    for col, title in (
+        ("system_uptime_pct", "System Uptime"),
+        ("port_uptime_pct", "Port Uptime"),
+        ("robot_uptime_pct", "Robot Uptime"),
+    ):
+        if col in avail.columns:
+            pivot = _aggregate_pivot(avail, col, aggregation)
+            _chart_title_with_info(title)
+            st.plotly_chart(_make_trend_chart(pivot, title, "Uptime %", pct=True), use_container_width=True)
 
     st.divider()
-    csv_bytes = df_health.to_csv(index=False).encode("utf-8")
-    st.download_button("Download health data", data=csv_bytes, file_name=f"health_{dt_from}_{dt_to}.csv", mime="text/csv", key="dl_health")
+    csv_bytes = avail.to_csv(index=False).encode("utf-8")
+    st.download_button("Download availability data", data=csv_bytes, file_name=f"availability_{dt_from}_{dt_to}.csv", mime="text/csv", key="dl_avail")
 
 
 def _view_error_health(date_from_str, date_to_str, aggregation):
@@ -816,11 +835,13 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
 
 def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     with st.spinner("Loading OEE inputs..."):
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
+            f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
             f_recovery = pool.submit(_load_for_sites, query_recovery_times, date_from_str, date_to_str)
         df_uptime = f_uptime.result()
+        df_port = f_port.result()
         df_robot = f_robot.result()
         df_recovery = f_recovery.result()
 
@@ -828,8 +849,10 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         st.warning("No data returned for the selected date range.")
         return
 
-    av = df_uptime[["site", "date", "up_ratio"]].copy()
-    av["availability_pct"] = av["up_ratio"] * 100
+    av = _compute_availability(df_uptime, df_port, df_robot)
+    if av.empty:
+        st.warning("Not enough data to compute Availability.")
+        return
 
     pf = df_robot[["site", "date", "working_pct"]].copy()
     pf = pf.rename(columns={"working_pct": "performance_pct"})
@@ -865,21 +888,7 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         merged["availability_pct"] * merged["performance_pct"] * merged["quality_pct"] / 10000.0
     )
 
-    today = date.today()
-    if aggregation == "Week":
-        period_end = today - timedelta(days=today.isoweekday())
-        period_start = period_end - timedelta(days=6)
-        period_label = f"W{period_start.isocalendar()[1]} ({period_start} — {period_end})"
-    elif aggregation == "Month":
-        first_of_month = today.replace(day=1)
-        period_end = first_of_month - timedelta(days=1)
-        period_start = period_end.replace(day=1)
-        period_label = period_start.strftime("%B %Y")
-    else:
-        period_start = today - timedelta(days=1)
-        period_end = period_start
-        period_label = period_start.strftime("%Y-%m-%d")
-
+    period_start, period_end, period_label = _period_window(aggregation)
     period_df = merged[
         (merged["date"].dt.date >= period_start) & (merged["date"].dt.date <= period_end)
     ]
@@ -889,33 +898,26 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
 
     cols = ["availability_pct", "performance_pct", "quality_pct", "oee_pct"]
     latest = period_df.groupby("site")[cols].mean().reset_index()
-    latest.columns = ["Site", "Availability %", "Performance %", "Quality %", "OEE %"]
-    latest["Site"] = latest["Site"].apply(_site_code)
+    latest["site"] = latest["site"].apply(_site_code)
+    latest = latest.rename(columns={
+        "site": "Site", "availability_pct": "Availability %", "performance_pct": "Performance %",
+        "quality_pct": "Quality %", "oee_pct": "OEE %",
+    })
     latest = latest.sort_values("OEE %", ascending=False).reset_index(drop=True)
 
     _title_with_info(
         "OEE — All Sites",
         "OEE = Availability × Performance × Quality, per site. "
-        "Availability = system running time ÷ total time (uptime endpoint). "
-        "Performance = share of robot-time spent working (robot-state). "
-        "Quality = share of stops that were NOT error-forced (uptime stop codes); "
-        "days with no stops count as 100%. Proxies pending official AutoStore targets.",
+        "Availability = composite Availability KPI (mean of System/Port/Robot uptime, "
+        "see Availability KPI tab). Performance = share of robot-time spent working "
+        "(robot-state). Quality = share of stops that were NOT error-forced (uptime "
+        "stop codes); days with no stops count as 100%. Proxies pending official AutoStore targets.",
     )
-
-    def _color_oee(val):
-        if pd.isna(val):
-            return ""
-        if val >= 75:
-            return "background-color: #c6efce"
-        if val >= 50:
-            return "background-color: #ffeb9c"
-        return "background-color: #ffc7ce"
-
-    styled = (latest.style
-        .map(_color_oee, subset=["OEE %"])
-        .format({c: "{:.1f}" for c in ["Availability %", "Performance %", "Quality %", "OEE %"]})
+    _render_colored_table(
+        latest,
+        num_cols=["Availability %", "Performance %", "Quality %", "OEE %"],
+        color_funcs={"OEE %": _color_oee},
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
     st.caption(f"Period: {period_label}")
 
     pivot = _aggregate_pivot(merged, "oee_pct", aggregation)
@@ -1193,6 +1195,55 @@ def _render_html_table(df):
         f'{_TABLE_CSS}<div class="as-table-wrap"><table class="as-table">'
         f'<thead><tr><th class="as-rowhdr">{index_label}</th>{header}</tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _color_oee(val):
+    if pd.isna(val):
+        return ""
+    if val >= 75:
+        return "#c6efce"
+    if val >= 50:
+        return "#ffeb9c"
+    return "#ffc7ce"
+
+
+def _color_availability(val):
+    if pd.isna(val):
+        return ""
+    if val >= 95:
+        return "#c6efce"
+    if val >= 90:
+        return "#ffeb9c"
+    return "#ffc7ce"
+
+
+def _render_colored_table(df, num_cols, color_funcs=None):
+    """Render a DataFrame (with a plain 'Site' column) as static HTML, with
+    optional per-column background colouring. Bypasses Arrow/st.dataframe."""
+    color_funcs = color_funcs or {}
+    num_cols = set(num_cols)
+    header = "".join(f"<th>{c}</th>" for c in df.columns)
+    body = []
+    for _, row in df.iterrows():
+        cells = []
+        for c in df.columns:
+            v = row[c]
+            style = ""
+            if c in color_funcs and pd.notna(v):
+                bg = color_funcs[c](v)
+                if bg:
+                    style = f' style="background-color:{bg}"'
+            if c in num_cols:
+                txt = "—" if pd.isna(v) else f"{v:.1f}"
+            else:
+                txt = "—" if pd.isna(v) else str(v)
+            cells.append(f"<td{style}>{txt}</td>")
+        body.append(f"<tr>{''.join(cells)}</tr>")
+    html = (
+        f'{_TABLE_CSS}<div class="as-table-wrap"><table class="as-table">'
+        f'<thead><tr>{header}</tr></thead><tbody>{"".join(body)}</tbody></table></div>'
     )
     st.markdown(html, unsafe_allow_html=True)
 
