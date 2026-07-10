@@ -505,21 +505,13 @@ def query_port_wait_time(installation_id, date_from_str, date_to_str):
             for rec in records:
                 if rec.get("subtype") != "BIN_PRESENTATIONS":
                     continue
-                pick_type_raw = rec.get("pick_type", "")
-                if pick_type_raw == "picks":
-                    pick_type = "Pick"
-                elif pick_type_raw == "goods_in":
-                    pick_type = "Goods In"
-                else:
-                    pick_type = str(pick_type_raw)
-
                 cat = rec.get("category")
                 category = str(int(cat)) if cat is not None else ""
 
                 rows.append({
                     "Timestamp": rec["hour"],
                     "Port ID": int(port_id_str),
-                    "Pick type": pick_type,
+                    "Pick type": rec.get("pick_type", ""),
                     "Count": rec.get("count", 0),
                     "Average bin wait time": rec.get("average_wait_bin", 0),
                     "Average operator handling time": rec.get("average_wait_user", 0),
