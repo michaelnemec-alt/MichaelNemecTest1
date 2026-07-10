@@ -826,9 +826,9 @@ AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
 _TABLE_CSS = """
 <style>
 .as-table-wrap { overflow-x: auto; margin: 4px 0 8px 0; }
-.as-table { border-collapse: collapse; font-size: 12px; width: auto; max-width: 100%; }
+.as-table { border-collapse: collapse; font-size: 11px; width: auto; max-width: 100%; }
 .as-table th, .as-table td {
-    border: 1px solid #eee; padding: 6px 10px; text-align: left; white-space: nowrap;
+    border: 1px solid #eee; padding: 4px 7px; text-align: left; white-space: nowrap;
 }
 .as-table th { background: #f5f7fa; color: #1F3864; font-weight: 600; }
 .as-table th.as-rowhdr, .as-table td.as-rowhdr { background: #fafafa; font-weight: 600; }
@@ -865,18 +865,19 @@ def render_autostore(selected_view="Versions of Systems"):
         st.warning("CubeAnalytics API token not configured. Add `[cubeanalytics] token` to Streamlit secrets.")
         return
 
-    dt_from, dt_to, aggregation = _sidebar_controls("AutoStore system")
-    if not dt_from:
-        return
-
-    date_from_str = str(dt_from)
-    date_to_str = str(dt_to)
-
     try:
         if selected_view == "Bin overview":
-            _view_bin_overview(date_from_str, date_to_str, aggregation)
+            dt_from, dt_to, aggregation = _sidebar_controls("AutoStore system")
+            if not dt_from:
+                return
+            _view_bin_overview(str(dt_from), str(dt_to), aggregation)
         else:
-            _view_versions(date_from_str, date_to_str)
+            with st.sidebar:
+                st.markdown("#### AutoStore system")
+                st.caption("Showing the latest reported module versions. No date/aggregation filter applies here.")
+            dt_to = date.today()
+            dt_from = dt_to - timedelta(days=14)
+            _view_versions(str(dt_from), str(dt_to))
         logger.info("=== render_autostore() completed for '%s' ===", selected_view)
     except Exception as e:
         logger.error("=== render_autostore() CRASHED for '%s': %s ===", selected_view, e)
