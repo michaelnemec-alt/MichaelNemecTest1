@@ -601,6 +601,25 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
 
 
 def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_to):
+    with st.sidebar:
+        selected_weekdays = st.multiselect(
+            "Filter to weekday(s)",
+            _WEEKDAY_ORDER,
+            default=[],
+            key="perf_kpi_weekday",
+            placeholder="All days",
+            help="Show only the selected weekday(s), each date side by side "
+                 "(e.g. pick Fri to compare Friday-over-Friday). Overrides "
+                 "Day/Week/Month for this view.",
+        )
+    weekday_idx = [_WEEKDAY_ORDER.index(w) for w in selected_weekdays]
+    agg_mode = "Day" if weekday_idx else aggregation
+
+    def _filter_weekday(df):
+        if weekday_idx and not df.empty and "date" in df.columns:
+            return df[df["date"].dt.dayofweek.isin(weekday_idx)]
+        return df
+
     with st.spinner("Loading performance..."):
         with ThreadPoolExecutor(max_workers=5) as pool:
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
@@ -609,25 +628,29 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
             f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
             f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
             f_inst = pool.submit(_load_for_sites, query_installation_data, date_from_str, date_to_str)
-        df_robot = f_robot.result()
-        df_health = f_health.result()
-        df_dig = f_dig.result()
-        df_usage = f_usage.result()
-        df_waits = _scoped_user_wait(f_pwt.result())
+        df_robot = _filter_weekday(f_robot.result())
+        df_health = _filter_weekday(f_health.result())
+        df_dig = _filter_weekday(f_dig.result())
+        df_usage = _filter_weekday(f_usage.result())
+        df_waits = _filter_weekday(_scoped_user_wait(f_pwt.result()))
         df_inst = f_inst.result()
         df_outside = _compute_bins_outside(df_inst)
-        df_outside_ts = _bins_outside_timeseries(df_inst)
+        df_outside_ts = _filter_weekday(_bins_outside_timeseries(df_inst))
 
     perf = _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits, df_outside)
     if perf.empty:
         st.warning("No data returned for the selected date range.")
         return
 
-    period_start, period_end, period_label = _period_window(aggregation)
-    period_df = perf[(perf["date"].dt.date >= period_start) & (perf["date"].dt.date <= period_end)]
-    if period_df.empty:
-        period_df = perf[perf["date"] == perf["date"].max()]
-        period_label += " (fallback: latest available)"
+    if weekday_idx:
+        period_df = perf
+        period_label = f"{', '.join(selected_weekdays)} · {dt_from} → {dt_to}"
+    else:
+        period_start, period_end, period_label = _period_window(aggregation)
+        period_df = perf[(perf["date"].dt.date >= period_start) & (perf["date"].dt.date <= period_end)]
+        if period_df.empty:
+            period_df = perf[perf["date"] == perf["date"].max()]
+            period_label += " (fallback: latest available)"
 
     label_map = {
         "robot_working_pct": "Robot Working %",
@@ -665,12 +688,12 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
         )
         st.caption(f"Period: {period_label}")
     with col_chart:
-        pivot = _aggregate_pivot(perf, "performance_pct", aggregation)
+        pivot = _aggregate_pivot(perf, "performance_pct", agg_mode)
         _chart_title_with_info("Performance KPI")
         st.plotly_chart(_make_trend_chart(pivot, "Performance KPI", "Performance %", pct=True), use_container_width=True)
 
     if "robot_working_pct" in perf.columns:
-        pivot = _aggregate_pivot(perf, "robot_working_pct", aggregation)
+        pivot = _aggregate_pivot(perf, "robot_working_pct", agg_mode)
         _chart_title_with_info(
             "Robot Working %",
             "Share of robot-time spent moving bins productively (robot-state). "
@@ -679,7 +702,7 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
         st.plotly_chart(_make_trend_chart(pivot, "Robot Working %", "Working %", threshold=60.0, threshold_label="Target 60%", pct=True), use_container_width=True)
 
     if "user_wait" in perf.columns:
-        pivot = _aggregate_pivot(perf, "user_wait", aggregation)
+        pivot = _aggregate_pivot(perf, "user_wait", agg_mode)
         _chart_title_with_info(
             "Bin Wait Time (picks, cat 1 & 2)",
             "Average time the operator waits at the port for the next bin to arrive, "
@@ -689,7 +712,7 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
         st.plotly_chart(_make_trend_chart(pivot, "Bin Wait Time (picks, cat 1 & 2)", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
 
     if "avg_digging_depth" in perf.columns:
-        pivot = _aggregate_pivot(perf, "avg_digging_depth", aggregation)
+        pivot = _aggregate_pivot(perf, "avg_digging_depth", agg_mode)
         _chart_title_with_info(
             "Average Digging Depth",
             "Average number of bins that had to be lifted to reach a requested bin "
@@ -699,7 +722,7 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
         st.plotly_chart(_make_trend_chart(pivot, "Average Digging Depth", "Bins above", threshold=1.0, threshold_label="Target 1"), use_container_width=True)
 
     if "waste_time" in perf.columns:
-        pivot = _aggregate_pivot(perf, "waste_time", aggregation)
+        pivot = _aggregate_pivot(perf, "waste_time", agg_mode)
         _chart_title_with_info(
             "Waste Time (system-level)",
             "Average time a robot waits at the port before it can deliver its bin. "
@@ -708,7 +731,7 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
         st.plotly_chart(_make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.1, threshold_label="Target < 0.1s"), use_container_width=True)
 
     if not df_usage.empty and "picks_per_bin" in df_usage.columns:
-        pivot = _aggregate_pivot(df_usage, "picks_per_bin", aggregation)
+        pivot = _aggregate_pivot(df_usage, "picks_per_bin", agg_mode)
         _chart_title_with_info(
             "Bin Usage Efficiency (picks per bin, cat 1 & 2)",
             "Category 1 & 2 picks ÷ distinct bins used. Higher = each bin is picked "
@@ -718,7 +741,7 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
         st.plotly_chart(_make_trend_chart(pivot, "Bin Usage Efficiency (picks per bin, cat 1 & 2)", "Picks / bin"), use_container_width=True)
 
     if not df_outside_ts.empty and "bins_outside_pct" in df_outside_ts.columns:
-        pivot = _aggregate_pivot(df_outside_ts, "bins_outside_pct", aggregation)
+        pivot = _aggregate_pivot(df_outside_ts, "bins_outside_pct", agg_mode)
         _chart_title_with_info(
             "Bins Outside %",
             "Share of bins located outside the grid (type 'outside') ÷ all bins, from the "
