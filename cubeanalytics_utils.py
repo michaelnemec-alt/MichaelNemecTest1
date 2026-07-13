@@ -23,7 +23,7 @@ def _headers():
     return {"API-Authorization": f"Token {token}"}
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def get_installations():
     """Fetch the list of installations the token has access to.
 
@@ -56,7 +56,7 @@ def _fetch_all_pages(url, params):
     return all_results
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_system_health(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/system-health/"
     params = {"after": date_from_str, "before": date_to_str}
@@ -97,7 +97,7 @@ def query_system_health(installation_id, date_from_str, date_to_str):
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_uptime(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/uptime/"
     params = {"after": date_from_str, "before": date_to_str}
@@ -123,7 +123,7 @@ def query_uptime(installation_id, date_from_str, date_to_str):
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_robot_state(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/robot-state/"
     params = {"after": date_from_str, "before": date_to_str}
@@ -173,7 +173,7 @@ def query_robot_state(installation_id, date_from_str, date_to_str):
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_bin_presentations(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/bin-presentations/"
     params = {"after": date_from_str, "before": date_to_str}
@@ -210,7 +210,7 @@ def query_bin_presentations(installation_id, date_from_str, date_to_str):
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_bins_above(installation_id, date_from_str, date_to_str):
     """Digging depth per day: average number of bins that had to be moved to
     reach a requested bin. Weighted mean of the bins_above distribution.
@@ -244,7 +244,7 @@ def query_bins_above(installation_id, date_from_str, date_to_str):
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_bin_usage(installation_id, date_from_str, date_to_str):
     """Bin-usage efficiency for category 1 & 2 picks, per day.
 
@@ -287,7 +287,7 @@ def query_bin_usage(installation_id, date_from_str, date_to_str):
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_port_uptime(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/port-uptime/"
     params = {"after": date_from_str, "before": date_to_str}
@@ -325,7 +325,7 @@ def query_port_uptime(installation_id, date_from_str, date_to_str):
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_incidents(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/incidents/"
     params = {"after": date_from_str, "before": date_to_str}
@@ -346,7 +346,7 @@ def query_incidents(installation_id, date_from_str, date_to_str):
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_robot_errors(installation_id, date_from_str, date_to_str):
     url_re = f"{BASE_URL}/installations/{installation_id}/robot-errors/"
     url_inc = f"{BASE_URL}/installations/{installation_id}/incidents/"
@@ -409,7 +409,7 @@ _ERROR_STOP_CODES = {"XHANDLER_ROBOT_ERROR_FAILED"}
 _MANUAL_STOP_CODES = {"STOPPED_FROM_CONSOLE", "KEYLOCK_DISARMED"}
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_recovery_times(installation_id, date_from_str, date_to_str):
     """'Time to recover' events read from the uptime endpoint's downtime periods.
 
@@ -455,7 +455,7 @@ def query_recovery_times(installation_id, date_from_str, date_to_str):
     return pd.DataFrame(rows)
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_port_wait_time_daily(installation_id, date_from_str, date_to_str):
     """Port bin-wait-time collapsed to one row per (date, port, pick type, category).
 
@@ -518,7 +518,7 @@ def query_port_wait_time_daily(installation_id, date_from_str, date_to_str):
     return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_port_wait_time(installation_id, date_from_str, date_to_str):
     """Fetch port-bin-wait-time data and return a DataFrame matching the CSV format."""
     url = f"{BASE_URL}/installations/{installation_id}/port-bin-wait-time/"
@@ -562,7 +562,7 @@ _INSTALLATION_GROUPS = [
 ]
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_installation_data(installation_id, date_from_str, date_to_str):
     """Daily asset census from the installation-data endpoint.
 
@@ -629,7 +629,7 @@ def _representative_version(inst_map):
     return ""
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def query_module_versions(installation_id, date_from_str, date_to_str):
     """Module software/firmware versions from the module-versions endpoint.
 
