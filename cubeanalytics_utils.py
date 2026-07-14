@@ -6,8 +6,32 @@ from collections import Counter
 import streamlit as st
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 BASE_URL = "https://api.cubeanalytics.autostoresystem.com/v1"
+
+
+@st.cache_resource
+def _session():
+    """Shared HTTP session that transparently retries transient failures
+    (502/503/504 gateway errors and connection drops) with backoff, so a
+    flaky upstream API recovers instead of failing the whole load."""
+    s = requests.Session()
+    retry = Retry(
+        total=4,
+        connect=4,
+        read=2,
+        status=4,
+        backoff_factor=1.0,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
 
 
 def is_api_configured():
@@ -29,7 +53,7 @@ def get_installations():
 
     Returns a list of dicts with keys: id, name, city, country.
     """
-    resp = requests.get(f"{BASE_URL}/installations/", headers=_headers(), timeout=30)
+    resp = _session().get(f"{BASE_URL}/installations/", headers=_headers(), timeout=30)
     resp.raise_for_status()
     data = resp.json()
     installations = []
@@ -47,7 +71,7 @@ def _fetch_all_pages(url, params):
     """Follow pagination and collect all results."""
     all_results = []
     while url:
-        resp = requests.get(url, headers=_headers(), params=params, timeout=60)
+        resp = _session().get(url, headers=_headers(), params=params, timeout=60)
         resp.raise_for_status()
         data = resp.json()
         all_results.extend(data.get("results", []))
