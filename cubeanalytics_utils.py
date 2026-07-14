@@ -19,16 +19,20 @@ def _session():
     flaky upstream API recovers instead of failing the whole load."""
     s = requests.Session()
     retry = Retry(
-        total=4,
-        connect=4,
-        read=2,
-        status=4,
-        backoff_factor=1.0,
+        total=3,
+        connect=3,
+        read=1,
+        status=3,
+        backoff_factor=0.4,
         status_forcelist=(429, 500, 502, 503, 504),
         allowed_methods=frozenset(["GET"]),
         raise_on_status=False,
     )
-    adapter = HTTPAdapter(max_retries=retry)
+    adapter = HTTPAdapter(
+        max_retries=retry,
+        pool_connections=64,
+        pool_maxsize=64,
+    )
     s.mount("https://", adapter)
     s.mount("http://", adapter)
     return s
