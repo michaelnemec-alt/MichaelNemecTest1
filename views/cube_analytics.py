@@ -608,12 +608,12 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
             default=[],
             key="perf_kpi_weekday",
             placeholder="All days",
-            help="Show only the selected weekday(s), each date side by side "
-                 "(e.g. pick Fri to compare Friday-over-Friday). Overrides "
-                 "Day/Week/Month for this view.",
+            help="Restrict every metric to the selected weekday(s). The Day/Week/Month "
+                 "aggregation is preserved — e.g. Week + Mon,Fri gives one weekly "
+                 "average computed over just Mondays and Fridays.",
         )
     weekday_idx = [_WEEKDAY_ORDER.index(w) for w in selected_weekdays]
-    agg_mode = "Day" if weekday_idx else aggregation
+    agg_mode = aggregation
 
     def _filter_weekday(df):
         if weekday_idx and not df.empty and "date" in df.columns:
