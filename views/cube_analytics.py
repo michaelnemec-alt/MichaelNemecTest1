@@ -250,7 +250,7 @@ def _sidebar_controls(heading):
 
         PRESETS = ["Yesterday", "7 days", "14 days", "30 days", "60 days", "90 days", "Custom"]
         if "cube_preset" not in st.session_state:
-            st.session_state.cube_preset = "30 days"
+            st.session_state.cube_preset = "7 days"
 
         preset = st.segmented_control("Date range", PRESETS,
                                        default=st.session_state.cube_preset,
@@ -268,7 +268,7 @@ def _sidebar_controls(heading):
             st.session_state.cube_custom_range = (computed_from, computed_to)
 
         if "cube_custom_range" not in st.session_state:
-            st.session_state.cube_custom_range = (date.today() - timedelta(days=30), date.today())
+            st.session_state.cube_custom_range = (date.today() - timedelta(days=7), date.today())
 
         date_val = st.date_input("Select dates", value=st.session_state.cube_custom_range,
                                   max_value=date.today(), key="cube_custom_dt")
