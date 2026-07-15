@@ -277,7 +277,7 @@ def _sidebar_controls(heading):
             dt_from, dt_to = (date_val[0] if isinstance(date_val, tuple) else date_val), None
 
         st.divider()
-        aggregation = st.radio("Aggregation", ["Day", "Week", "Month"], index=1, horizontal=True, key="cube_agg")
+        aggregation = st.radio("Aggregation", ["Day", "Week", "Month"], index=0, horizontal=True, key="cube_agg")
 
         try:
             site_names = sorted(inst["name"] for inst in get_installations())
