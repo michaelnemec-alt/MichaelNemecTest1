@@ -675,7 +675,7 @@ def _view_performance_kpi(date_from_str, date_to_str, aggregation, dt_from, dt_t
         "④ Bins outside: share of bins outside the grid vs < 1% target. "
         "This composite feeds the Performance term of OEE.",
     )
-    col_tbl, col_chart = st.columns([3, 2], gap="small")
+    col_tbl, col_chart = st.columns([4, 3], gap="small")
     with col_tbl:
         _render_colored_table(
             latest,
