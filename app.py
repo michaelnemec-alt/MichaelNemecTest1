@@ -48,7 +48,7 @@ st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-
 PAGES = ["Home", "Reporting & Data Tools *", "System OEE *"]
 OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Performance KPI", "Facility KPI *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
-SYSTEM_KPI_VIEWS = ["Availability KPI", "System", "Ports", "Robots", "Chargers", "Error & Health Metrics", "AutoStore system *"]
+SYSTEM_KPI_VIEWS = ["Availability KPI", "System", "Ports", "Robots", "Chargers", "AutoStore system *", "Error & Health Metrics"]
 FACILITY_VIEWS = ["Time to Recover", "Reliability", "Incidents"]
 AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
 
