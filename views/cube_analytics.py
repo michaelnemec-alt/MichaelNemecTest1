@@ -1361,8 +1361,18 @@ def _view_sort_test(date_from_str, date_to_str, aggregation):
         lambda v: f"background-color:{_color_oee(v)}" if (pd.notna(v) and _color_oee(v)) else "",
         subset=["OEE %"],
     ).format({c: "{:.1f}" for c in _OEE_NUM_COLS})
-    st.dataframe(styler, use_container_width=True, hide_index=True)
-    st.caption(f"Period: {period_label}")
+    col_df, _spacer = st.columns([2, 5], gap="small")
+    with col_df:
+        st.dataframe(
+            styler,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Site": st.column_config.TextColumn(width="small"),
+                **{c: st.column_config.NumberColumn(width="small") for c in _OEE_NUM_COLS},
+            },
+        )
+        st.caption(f"Period: {period_label}")
 
 
 def _view_module_robots(date_from_str, date_to_str, aggregation):

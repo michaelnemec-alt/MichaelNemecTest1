@@ -431,9 +431,12 @@ def query_robot_errors(installation_id, date_from_str, date_to_str):
 
 
 # Stop codes grouped into recovery categories.
-_ERROR_STOP_CODES = {"XHANDLER_ROBOT_ERROR_FAILED"}
-# STOPPED_FROM_CONSOLE = operator stopped from the console; KEYLOCK_DISARMED = key
-# switch left off after a restart, auto-stops the system (a human-error stop).
+# Manual = human-initiated stops: STOPPED_FROM_CONSOLE (operator stopped from the
+# console) and KEYLOCK_DISARMED (key switch left off after a restart auto-stops the
+# system). Every other coded downtime segment is a fault / error stop — this matches
+# the AutoStore portal's "Errors causing system stop" total, which counts all fault
+# codes (XHANDLER_ROBOT_ERROR_FAILED, RETRANS_MISSING_AP, ROBOT_DOOR_STOP, …), not
+# just the generic robot-error wrapper.
 _MANUAL_STOP_CODES = {"STOPPED_FROM_CONSOLE", "KEYLOCK_DISARMED"}
 
 
@@ -448,7 +451,9 @@ def query_recovery_times(installation_id, date_from_str, date_to_str):
     total time the system was down (down_seconds = STOPPED -> RUNNING), so it is a
     first-party source with no event-log reconstruction needed.
 
-    - error_stop: system force-stopped by a robot error (XHANDLER_ROBOT_ERROR_FAILED).
+    - error_stop: system force-stopped by any fault code (robot errors such as
+      MISSING_GAP/BRAKE_FAILURE reported under XHANDLER_ROBOT_ERROR_FAILED, plus
+      RETRANS_MISSING_AP, ROBOT_DOOR_STOP, …) — i.e. any non-manual coded stop.
     - manual: operator/console stop or a key-lock-disarmed stop (human-initiated).
 
     recovery_seconds = down_seconds (total time the system was stopped).
@@ -457,30 +462,57 @@ def query_recovery_times(installation_id, date_from_str, date_to_str):
     params = {"after": date_from_str, "before": date_to_str}
     results = _fetch_all_pages(url, params)
 
-    rows = []
+    rows = _recovery_rows_from_uptime(results)
+    if not rows:
+        return pd.DataFrame(columns=["date", "category", "recovery_seconds"])
+    return pd.DataFrame(rows)
+
+
+def _recovery_rows_from_uptime(results):
+    """Turn raw uptime pages into recovery rows (date, category, recovery_seconds).
+
+    Kept pure (no I/O) so the classification and stitching rules can be tested.
+    """
+    segs = []
     for day_result in results:
         for seg in day_result.get("result", {}).get("periods", []):
             if seg.get("mode") != "downtime":
                 continue
             code = seg.get("stop_code_name")
-            if code in _ERROR_STOP_CODES:
-                category = "error_stop"
-            elif code in _MANUAL_STOP_CODES:
-                category = "manual"
-            else:
+            if not code:
                 continue
-            ts = pd.to_datetime(seg.get("start_at"), errors="coerce")
-            if pd.isna(ts):
+            start = pd.to_datetime(seg.get("start_at"), errors="coerce")
+            if pd.isna(start):
                 continue
-            rows.append({
-                "date": ts.normalize(),
-                "category": category,
-                "recovery_seconds": seg.get("down_seconds", 0) or 0,
+            segs.append({
+                "start": start,
+                "end": pd.to_datetime(seg.get("end_at"), errors="coerce"),
+                "code": code,
+                "down_seconds": seg.get("down_seconds", 0) or 0,
             })
 
-    if not rows:
-        return pd.DataFrame(columns=["date", "category", "recovery_seconds"])
-    return pd.DataFrame(rows)
+    # The uptime endpoint truncates a stop that spans midnight into one segment per
+    # day, which double-counts a single physical stop. Merge a segment into the
+    # previous one when it has the same stop code and starts within a couple of
+    # seconds of the previous segment's end (i.e. is contiguous across the day
+    # boundary). This matches the AutoStore portal's per-stop counting.
+    segs.sort(key=lambda s: s["start"])
+    merged = []
+    for s in segs:
+        if merged:
+            prev = merged[-1]
+            if (s["code"] == prev["code"] and pd.notna(prev["end"])
+                    and 0 <= (s["start"] - prev["end"]).total_seconds() <= 2):
+                prev["end"] = s["end"]
+                prev["down_seconds"] += s["down_seconds"]
+                continue
+        merged.append(s)
+
+    return [{
+        "date": s["start"].normalize(),
+        "category": "manual" if s["code"] in _MANUAL_STOP_CODES else "error_stop",
+        "recovery_seconds": s["down_seconds"],
+    } for s in merged]
 
 
 @st.cache_data(ttl=86400, persist="disk")
