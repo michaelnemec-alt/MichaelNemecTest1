@@ -797,7 +797,47 @@ def _view_error_health(date_from_str, date_to_str, aggregation):
         st.plotly_chart(_make_trend_chart(pivot, "MTBF (Mean Time Between Failures)", "Hours"), use_container_width=True)
 
 
+# Each Performance chart mapped to the single data source it needs, so we only
+# fetch that source's query (for all sites) instead of loading everything at once.
+_PERF_CHART_SOURCE = {
+    "User Wait Time": "health",
+    "Waste Time (system-level)": "health",
+    "Average Digging Depth": "dig",
+    "Bin Usage Efficiency (picks per bin, cat 1 & 2)": "usage",
+    "Picks (cat 1 & 2)": "usage",
+    "Unique Bins Used (cat 1 & 2)": "usage",
+    "Bin Wait Time (filtered)": "pwt",
+    "User Wait Time (filtered)": "pwt",
+    "Waste Time (filtered)": "pwt",
+    "Bin Presentations (filtered)": "pwt",
+    "Robot Working %": "robot",
+    "Robot Availability": "robot",
+}
+
+_PERF_SOURCE_QUERY = {
+    "health": query_system_health,
+    "pwt": query_port_wait_time_daily,
+    "robot": query_robot_state,
+    "dig": query_bins_above,
+    "usage": query_bin_usage,
+}
+
+
 def _view_performance(date_from_str, date_to_str, aggregation):
+    st.markdown("#### Performance")
+
+    chart_names = list(_PERF_CHART_SOURCE.keys())
+    selected_chart = st.selectbox(
+        "Chart",
+        chart_names,
+        index=0,
+        key="perf_chart_select",
+        help="Load one chart at a time. Fetching every metric for all 10 sites at "
+             "once is heavy and can crash the app — pick a single chart so only its "
+             "data source is queried.",
+    )
+    source = _PERF_CHART_SOURCE[selected_chart]
+
     with st.sidebar:
         selected_weekdays = st.multiselect(
             "Filter to weekday(s)",
@@ -817,160 +857,151 @@ def _view_performance(date_from_str, date_to_str, aggregation):
             return df[df["date"].dt.dayofweek.isin(weekday_idx)]
         return df
 
-    with st.spinner("Loading performance data..."):
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
-            f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
-            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
-            f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
-            f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
-        df_health = _filter_weekday(f_health.result())
-        df_pwt = _filter_weekday(f_pwt.result())
-        df_robot = _filter_weekday(f_robot.result())
-        df_dig = _filter_weekday(f_dig.result())
-        df_usage = _filter_weekday(f_usage.result())
+    with st.spinner(f"Loading {selected_chart}…"):
+        df = _filter_weekday(_load_for_sites(_PERF_SOURCE_QUERY[source], date_from_str, date_to_str))
 
-    if df_health.empty:
-        st.warning("No data returned.")
+    if df.empty:
+        st.warning("No data returned for this chart.")
         return
 
-    st.markdown("#### Performance")
+    if source == "health":
+        if selected_chart == "User Wait Time" and "wait_bin" in df.columns:
+            pivot = _aggregate_pivot(df, "wait_bin", agg_mode)
+            _chart_title_with_info(
+                "User Wait Time",
+                "Average time the operator waits at the port for the next bin to arrive "
+                "(system-level). Lower is better.",
+            )
+            st.plotly_chart(_make_trend_chart(pivot, "User Wait Time", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
+        elif selected_chart == "Waste Time (system-level)" and "waste_time" in df.columns:
+            pivot = _aggregate_pivot(df, "waste_time", agg_mode)
+            _chart_title_with_info(
+                "Waste Time (system-level)",
+                "Average time a robot waits at the port before it can deliver its bin "
+                "(system-level). Feeds the Performance KPI; target 0.1s. Lower is better.",
+            )
+            st.plotly_chart(_make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.1, threshold_label="Target < 0.1s"), use_container_width=True)
 
-    if "wait_bin" in df_health.columns:
-        pivot = _aggregate_pivot(df_health, "wait_bin", agg_mode)
-        _chart_title_with_info(
-            "User Wait Time",
-            "Average time the operator waits at the port for the next bin to arrive "
-            "(system-level). Lower is better.",
-        )
-        st.plotly_chart(_make_trend_chart(pivot, "User Wait Time", "Wait Time (s)", threshold=2.0, threshold_label="Target < 2s"), use_container_width=True)
+    elif source == "dig":
+        if "avg_digging_depth" in df.columns:
+            pivot = _aggregate_pivot(df, "avg_digging_depth", agg_mode)
+            _chart_title_with_info(
+                "Average Digging Depth",
+                "Average number of bins that had to be lifted to reach a requested bin "
+                "(bins-above endpoint), weighted by task count. Lower is better — it means "
+                "requested bins sit nearer the top of the grid.",
+            )
+            st.plotly_chart(_make_trend_chart(pivot, "Average Digging Depth", "Bins above"), use_container_width=True)
 
-    if "waste_time" in df_health.columns:
-        pivot = _aggregate_pivot(df_health, "waste_time", agg_mode)
-        _chart_title_with_info(
-            "Waste Time (system-level)",
-            "Average time a robot waits at the port before it can deliver its bin "
-            "(system-level). Feeds the Performance KPI; target 0.1s. Lower is better.",
-        )
-        st.plotly_chart(_make_trend_chart(pivot, "Waste Time (system-level)", "Waste Time (s)", threshold=0.1, threshold_label="Target < 0.1s"), use_container_width=True)
+    elif source == "usage":
+        if selected_chart == "Bin Usage Efficiency (picks per bin, cat 1 & 2)" and "picks_per_bin" in df.columns:
+            pivot = _aggregate_pivot(df, "picks_per_bin", agg_mode)
+            _chart_title_with_info(
+                "Bin Usage Efficiency (picks per bin, cat 1 & 2)",
+                "Category 1 & 2 picks ÷ distinct bins used. Higher = each bin is picked "
+                "more times before being stored away = better reuse and less digging. "
+                "Distinct bins are counted by task-group (the daily API exposes no bin_id).",
+            )
+            st.plotly_chart(_make_trend_chart(pivot, "Bin Usage Efficiency (picks per bin, cat 1 & 2)", "Picks / bin"), use_container_width=True)
+        elif selected_chart == "Picks (cat 1 & 2)":
+            pivot_p = _aggregate_pivot_sum(df, "picks", agg_mode)
+            _chart_title_with_info(
+                "Picks (cat 1 & 2)",
+                "Total category 1 & 2 pick presentations in the period.",
+            )
+            st.plotly_chart(_make_trend_chart(pivot_p, "Picks (cat 1 & 2)", "Picks"), use_container_width=True)
+        elif selected_chart == "Unique Bins Used (cat 1 & 2)":
+            pivot_b = _aggregate_pivot_sum(df, "unique_bins", agg_mode)
+            _chart_title_with_info(
+                "Unique Bins Used (cat 1 & 2)",
+                "Distinct bins (task-groups) presented for category 1 & 2 picks. "
+                "For Week/Month this sums the daily distinct-bin counts.",
+            )
+            st.plotly_chart(_make_trend_chart(pivot_b, "Unique Bins Used (cat 1 & 2)", "Bins"), use_container_width=True)
 
-    if not df_dig.empty and "avg_digging_depth" in df_dig.columns:
-        pivot = _aggregate_pivot(df_dig, "avg_digging_depth", agg_mode)
-        _chart_title_with_info(
-            "Average Digging Depth",
-            "Average number of bins that had to be lifted to reach a requested bin "
-            "(bins-above endpoint), weighted by task count. Lower is better — it means "
-            "requested bins sit nearer the top of the grid.",
-        )
-        st.plotly_chart(_make_trend_chart(pivot, "Average Digging Depth", "Bins above"), use_container_width=True)
+    elif source == "robot":
+        if selected_chart == "Robot Working %" and "working_pct" in df.columns:
+            pivot = _aggregate_pivot(df, "working_pct", agg_mode)
+            _chart_title_with_info("Robot Working %")
+            st.plotly_chart(_make_trend_chart(pivot, "Robot Working %", "% Working", pct=True), use_container_width=True)
+        elif selected_chart == "Robot Availability" and "robot_availability_pct" in df.columns:
+            pivot = _aggregate_pivot(df, "robot_availability_pct", agg_mode)
+            _chart_title_with_info("Robot Availability")
+            st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
 
-    if not df_usage.empty and "picks_per_bin" in df_usage.columns:
-        pivot = _aggregate_pivot(df_usage, "picks_per_bin", agg_mode)
-        _chart_title_with_info(
-            "Bin Usage Efficiency (picks per bin, cat 1 & 2)",
-            "Category 1 & 2 picks ÷ distinct bins used. Higher = each bin is picked "
-            "more times before being stored away = better reuse and less digging. "
-            "Distinct bins are counted by task-group (the daily API exposes no bin_id).",
-        )
-        st.plotly_chart(_make_trend_chart(pivot, "Bin Usage Efficiency (picks per bin, cat 1 & 2)", "Picks / bin"), use_container_width=True)
+    elif source == "pwt":
+        _render_perf_filtered(df, selected_chart, agg_mode)
 
-        pivot_p = _aggregate_pivot_sum(df_usage, "picks", agg_mode)
-        _chart_title_with_info(
-            "Picks (cat 1 & 2)",
-            "Total category 1 & 2 pick presentations in the period.",
-        )
-        st.plotly_chart(_make_trend_chart(pivot_p, "Picks (cat 1 & 2)", "Picks"), use_container_width=True)
 
-        pivot_b = _aggregate_pivot_sum(df_usage, "unique_bins", agg_mode)
-        _chart_title_with_info(
-            "Unique Bins Used (cat 1 & 2)",
-            "Distinct bins (task-groups) presented for category 1 & 2 picks. "
-            "For Week/Month this sums the daily distinct-bin counts.",
-        )
-        st.plotly_chart(_make_trend_chart(pivot_b, "Unique Bins Used (cat 1 & 2)", "Bins"), use_container_width=True)
+_PERF_FILTERED_METRIC = {
+    "Bin Wait Time (filtered)": ("avg_wait_bin", "Wait Bin (s)", 2.0, "Target < 2s"),
+    "User Wait Time (filtered)": ("avg_wait_user", "Wait User (s)", None, None),
+    "Waste Time (filtered)": ("avg_waste", "Waste Time (s)", 0.5, "Target < 0.5s"),
+    "Bin Presentations (filtered)": ("total_count", "Count", None, None),
+}
 
-    st.divider()
+
+def _render_perf_filtered(df_pwt, selected_chart, agg_mode):
     st.markdown("**Filtered by Pick Type / Category**")
 
-    if not df_pwt.empty:
-        all_pick_types = sorted(df_pwt["pick_type"].dropna().unique().tolist())
-        all_categories = sorted(c for c in df_pwt["category"].dropna().unique().tolist() if c != "")
+    all_pick_types = sorted(df_pwt["pick_type"].dropna().unique().tolist())
+    all_categories = sorted(c for c in df_pwt["category"].dropna().unique().tolist() if c != "")
 
-        default_pick_types = [p for p in all_pick_types if p == "picks"]
-        default_categories = [c for c in all_categories if c in ("1", "2")]
+    default_pick_types = [p for p in all_pick_types if p == "picks"]
+    default_categories = [c for c in all_categories if c in ("1", "2")]
 
-        with st.sidebar:
-            st.divider()
-            st.markdown("#### Performance Filters")
-            selected_pick_types = st.multiselect(
-                "Pick Type", all_pick_types, default=default_pick_types, key="perf_pick_type",
-                placeholder="All pick types",
-            )
-            selected_categories = st.multiselect(
-                "Category", all_categories, default=default_categories, key="perf_category",
-                placeholder="All categories",
-            )
+    with st.sidebar:
+        st.divider()
+        st.markdown("#### Performance Filters")
+        selected_pick_types = st.multiselect(
+            "Pick Type", all_pick_types, default=default_pick_types, key="perf_pick_type",
+            placeholder="All pick types",
+        )
+        selected_categories = st.multiselect(
+            "Category", all_categories, default=default_categories, key="perf_category",
+            placeholder="All categories",
+        )
 
-        use_pick = selected_pick_types if selected_pick_types else all_pick_types
-        use_cat = selected_categories if selected_categories else all_categories
+    use_pick = selected_pick_types if selected_pick_types else all_pick_types
+    use_cat = selected_categories if selected_categories else all_categories
 
-        df_filtered = df_pwt[
-            df_pwt["pick_type"].isin(use_pick) & df_pwt["category"].isin(use_cat)
-        ]
+    df_filtered = df_pwt[
+        df_pwt["pick_type"].isin(use_pick) & df_pwt["category"].isin(use_cat)
+    ]
 
-        if df_filtered.empty:
-            st.info("No data for the selected filters.")
-        else:
-            wt = df_filtered.copy()
-            wt["w_wait_bin"] = wt["average_wait_bin"] * wt["count"]
-            wt["w_wait_user"] = wt["average_wait_user"] * wt["count"]
-            wt["w_waste"] = wt["average_waste_time"] * wt["count"]
+    if df_filtered.empty:
+        st.info("No data for the selected filters.")
+        return
 
-            if agg_mode == "Week":
-                wt["period"] = wt["date"].dt.to_period("W").dt.start_time
-            elif agg_mode == "Month":
-                wt["period"] = wt["date"].dt.to_period("M").dt.start_time
-            else:
-                wt["period"] = wt["date"]
-            if agg_mode in ("Week", "Month"):
-                wt = wt[wt["period"] < _current_period_start(agg_mode)]
+    wt = df_filtered.copy()
+    wt["w_wait_bin"] = wt["average_wait_bin"] * wt["count"]
+    wt["w_wait_user"] = wt["average_wait_user"] * wt["count"]
+    wt["w_waste"] = wt["average_waste_time"] * wt["count"]
 
-            agg = wt.groupby(["site", "period"]).agg(
-                total_count=("count", "sum"),
-                sum_wait_bin=("w_wait_bin", "sum"),
-                sum_wait_user=("w_wait_user", "sum"),
-                sum_waste=("w_waste", "sum"),
-            ).reset_index()
-            agg["avg_wait_bin"] = agg["sum_wait_bin"] / agg["total_count"]
-            agg["avg_wait_user"] = agg["sum_wait_user"] / agg["total_count"]
-            agg["avg_waste"] = agg["sum_waste"] / agg["total_count"]
-
-            for metric, label, ylabel, thresh, thresh_label in [
-                ("avg_wait_bin", "Bin Wait Time (filtered)", "Wait Bin (s)", 2.0, "Target < 2s"),
-                ("avg_wait_user", "User Wait Time (filtered)", "Wait User (s)", None, None),
-                ("avg_waste", "Waste Time (filtered)", "Waste Time (s)", 0.5, "Target < 0.5s"),
-            ]:
-                piv = agg.pivot(index="period", columns="site", values=metric).sort_index()
-                piv = _format_pivot_index(piv, agg_mode)
-                _chart_title_with_info(label)
-                st.plotly_chart(_make_trend_chart(piv, label, ylabel, threshold=thresh, threshold_label=thresh_label), use_container_width=True)
-
-            piv_count = agg.pivot(index="period", columns="site", values="total_count").sort_index()
-            piv_count = _format_pivot_index(piv_count, agg_mode)
-            _chart_title_with_info("Bin Presentations (filtered)")
-            st.plotly_chart(_make_trend_chart(piv_count, "Bin Presentations (filtered)", "Count"), use_container_width=True)
+    if agg_mode == "Week":
+        wt["period"] = wt["date"].dt.to_period("W").dt.start_time
+    elif agg_mode == "Month":
+        wt["period"] = wt["date"].dt.to_period("M").dt.start_time
     else:
-        st.info("No port wait time data available.")
+        wt["period"] = wt["date"]
+    if agg_mode in ("Week", "Month"):
+        wt = wt[wt["period"] < _current_period_start(agg_mode)]
 
-    if not df_robot.empty and "working_pct" in df_robot.columns:
-        pivot = _aggregate_pivot(df_robot, "working_pct", agg_mode)
-        _chart_title_with_info("Robot Working %")
-        st.plotly_chart(_make_trend_chart(pivot, "Robot Working %", "% Working", pct=True), use_container_width=True)
+    agg = wt.groupby(["site", "period"]).agg(
+        total_count=("count", "sum"),
+        sum_wait_bin=("w_wait_bin", "sum"),
+        sum_wait_user=("w_wait_user", "sum"),
+        sum_waste=("w_waste", "sum"),
+    ).reset_index()
+    agg["avg_wait_bin"] = agg["sum_wait_bin"] / agg["total_count"]
+    agg["avg_wait_user"] = agg["sum_wait_user"] / agg["total_count"]
+    agg["avg_waste"] = agg["sum_waste"] / agg["total_count"]
 
-    if not df_robot.empty and "robot_availability_pct" in df_robot.columns:
-        pivot = _aggregate_pivot(df_robot, "robot_availability_pct", agg_mode)
-        _chart_title_with_info("Robot Availability")
-        st.plotly_chart(_make_trend_chart(pivot, "Robot Availability", "% Available", pct=True), use_container_width=True)
+    metric, ylabel, thresh, thresh_label = _PERF_FILTERED_METRIC[selected_chart]
+    piv = agg.pivot(index="period", columns="site", values=metric).sort_index()
+    piv = _format_pivot_index(piv, agg_mode)
+    _chart_title_with_info(selected_chart)
+    st.plotly_chart(_make_trend_chart(piv, selected_chart, ylabel, threshold=thresh, threshold_label=thresh_label), use_container_width=True)
 
 
 
