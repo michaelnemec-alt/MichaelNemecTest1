@@ -45,7 +45,7 @@ section[data-testid="stSidebar"] button {
 st.markdown("<p style='font-size:0.85em; color:#9ca3af; margin:0;'>AUTOSTORE</p>", unsafe_allow_html=True)
 st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-weight:800;'>Analytics</h1>", unsafe_allow_html=True)
 
-PAGES = ["Home", "Reporting & Data Tools *", "System OEE *"]
+PAGES = ["Home", "Reporting & Data Tools *", "System OEE *", "Test"]
 OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Performance KPI", "Facility KPI *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
 SYSTEM_KPI_VIEWS = ["Availability KPI", "System", "Ports", "Robots", "Chargers", "AutoStore system *", "Error & Health Metrics"]
@@ -191,5 +191,9 @@ elif selected == "System OEE *":
         from views.cube_analytics import render
         logger.info("Rendering Facility Performance view: %s", facility_view)
         render(facility_view or "Time to Recover")
+
+elif selected == "Test":
+    from views.cube_analytics import render
+    render("Sort Test")
 
 st.markdown("<div class='footer'>Created by <b>Michael Nemec</b></div>", unsafe_allow_html=True)

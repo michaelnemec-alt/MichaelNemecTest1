@@ -326,6 +326,8 @@ def render(selected_view="Overview & Health"):
             _view_error_health(date_from_str, date_to_str, aggregation)
         elif selected_view == "Performance":
             _view_performance(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Sort Test":
+            _view_sort_test(date_from_str, date_to_str, aggregation)
         elif selected_view == "Battery & Robots":
             _view_battery_robots(date_from_str, date_to_str, aggregation)
         elif selected_view == "Health Index *":
@@ -1199,43 +1201,43 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
             st.plotly_chart(_make_trend_chart(pivot_false, "Error Stopped System False", "Count"), use_container_width=True)
 
 
-def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
-    with st.spinner("Loading OEE inputs..."):
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
-            f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
-            f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
-            f_recovery = pool.submit(_load_for_sites, query_recovery_times, date_from_str, date_to_str)
-            f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
-            f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
-            f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
-            f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
-            f_ver = pool.submit(_load_for_sites, query_module_versions, date_from_str, date_to_str)
-            f_inst = pool.submit(_load_for_sites, query_installation_data, date_from_str, date_to_str)
-        df_uptime = f_uptime.result()
-        df_port = f_port.result()
-        df_robot = f_robot.result()
-        df_recovery = f_recovery.result()
-        df_health = f_health.result()
-        df_dig = f_dig.result()
-        df_usage = f_usage.result()
-        df_waits = _scoped_user_wait(f_pwt.result())
-        df_ver = f_ver.result()
-        df_outside = _compute_bins_outside(f_inst.result())
+def _compute_oee_table(date_from_str, date_to_str, aggregation):
+    """Load inputs and build the OEE — All Sites table.
+
+    Returns (latest, merged, period_label) or None when there isn't enough data.
+    """
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        f_uptime = pool.submit(_load_for_sites, query_uptime, date_from_str, date_to_str)
+        f_port = pool.submit(_load_for_sites, query_port_uptime, date_from_str, date_to_str)
+        f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
+        f_recovery = pool.submit(_load_for_sites, query_recovery_times, date_from_str, date_to_str)
+        f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
+        f_dig = pool.submit(_load_for_sites, query_bins_above, date_from_str, date_to_str)
+        f_usage = pool.submit(_load_for_sites, query_bin_usage, date_from_str, date_to_str)
+        f_pwt = pool.submit(_load_for_sites, query_port_wait_time_daily, date_from_str, date_to_str)
+        f_ver = pool.submit(_load_for_sites, query_module_versions, date_from_str, date_to_str)
+        f_inst = pool.submit(_load_for_sites, query_installation_data, date_from_str, date_to_str)
+    df_uptime = f_uptime.result()
+    df_port = f_port.result()
+    df_robot = f_robot.result()
+    df_recovery = f_recovery.result()
+    df_health = f_health.result()
+    df_dig = f_dig.result()
+    df_usage = f_usage.result()
+    df_waits = _scoped_user_wait(f_pwt.result())
+    df_ver = f_ver.result()
+    df_outside = _compute_bins_outside(f_inst.result())
 
     if df_uptime.empty or df_robot.empty:
-        st.warning("No data returned for the selected date range.")
-        return
+        return None
 
     av = _compute_availability(df_uptime, df_port, df_robot, df_ver)
     if av.empty:
-        st.warning("Not enough data to compute Availability.")
-        return
+        return None
 
     pf = _compute_performance(df_robot, df_health, df_dig, df_usage, df_waits, df_outside)
     if pf.empty:
-        st.warning("Not enough data to compute Performance.")
-        return
+        return None
 
     if not df_recovery.empty:
         rec = df_recovery.copy()
@@ -1262,8 +1264,7 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
     merged["quality_pct"] = merged["quality_pct"].fillna(100.0)
     merged = merged.dropna(subset=["availability_pct", "performance_pct"])
     if merged.empty:
-        st.warning("Not enough overlapping data to compute OEE.")
-        return
+        return None
     merged["oee_pct"] = (
         merged["availability_pct"] * merged["performance_pct"] * merged["quality_pct"] / 10000.0
     )
@@ -1284,23 +1285,36 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         "quality_pct": "Quality %", "oee_pct": "OEE %",
     })
     latest = latest.sort_values("OEE %", ascending=False).reset_index(drop=True)
+    return latest, merged, period_label
 
-    _title_with_info(
-        "OEE — All Sites",
-        "OEE = Availability × Performance × Quality, per site. "
-        "Availability = composite Availability KPI (weighted mean: System 40% / Port 25% / "
-        "Robot 25% / Software 10%, see Availability KPI tab). Performance = composite Performance KPI (mean of three "
-        "interaction sub-scores: utilisation-adjusted flow [robot working% vs 60% with user wait "
-        "on picks/cat 1&2 excused when busy], waste time vs 0.1s, config quality [digging vs 1 + "
-        "bin reuse vs 6], and bins outside vs < 1%; see Performance KPI tab). "
-        "Quality = share of stops that were NOT error-forced (uptime "
-        "stop codes); days with no stops count as 100%. Proxies pending official AutoStore targets.",
-    )
+
+_OEE_NUM_COLS = ["Availability %", "Performance %", "Quality %", "OEE %"]
+_OEE_TABLE_INFO = (
+    "OEE = Availability × Performance × Quality, per site. "
+    "Availability = composite Availability KPI (weighted mean: System 40% / Port 25% / "
+    "Robot 25% / Software 10%, see Availability KPI tab). Performance = composite Performance KPI (mean of three "
+    "interaction sub-scores: utilisation-adjusted flow [robot working% vs 60% with user wait "
+    "on picks/cat 1&2 excused when busy], waste time vs 0.1s, config quality [digging vs 1 + "
+    "bin reuse vs 6], and bins outside vs < 1%; see Performance KPI tab). "
+    "Quality = share of stops that were NOT error-forced (uptime "
+    "stop codes); days with no stops count as 100%. Proxies pending official AutoStore targets."
+)
+
+
+def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
+    with st.spinner("Loading OEE inputs..."):
+        result = _compute_oee_table(date_from_str, date_to_str, aggregation)
+    if result is None:
+        st.warning("No data returned for the selected date range.")
+        return
+    latest, merged, period_label = result
+
+    _title_with_info("OEE — All Sites", _OEE_TABLE_INFO)
     col_tbl, col_chart = st.columns([2, 5], gap="small")
     with col_tbl:
         _render_colored_table(
             latest,
-            num_cols=["Availability %", "Performance %", "Quality %", "OEE %"],
+            num_cols=_OEE_NUM_COLS,
             color_funcs={"OEE %": _color_oee},
         )
         st.caption(f"Period: {period_label}")
@@ -1308,6 +1322,47 @@ def _view_oee_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         pivot = _aggregate_pivot(merged, "oee_pct", aggregation)
         _chart_title_with_info("OEE")
         st.plotly_chart(_make_trend_chart(pivot, "OEE", "OEE %", pct=True), use_container_width=True)
+
+
+def _view_sort_test(date_from_str, date_to_str, aggregation):
+    st.markdown("#### Sorting test — OEE — All Sites")
+    st.caption(
+        "Two implementations of the same table so you can decide how you'd like to "
+        "sort KPI tables. Same data in both."
+    )
+    with st.spinner("Loading OEE inputs..."):
+        result = _compute_oee_table(date_from_str, date_to_str, aggregation)
+    if result is None:
+        st.warning("No data returned for the selected date range.")
+        return
+    latest, _merged, period_label = result
+
+    _title_with_info("Option 1 — coloured table + Sort by dropdown", _OEE_TABLE_INFO)
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        sort_col = st.selectbox(
+            "Sort by", ["Site"] + _OEE_NUM_COLS, index=4, key="sorttest_col"
+        )
+    with c2:
+        sort_dir = st.radio(
+            "Order", ["Descending", "Ascending"], horizontal=True, key="sorttest_dir"
+        )
+    ascending = sort_dir == "Ascending"
+    sorted_df = latest.sort_values(sort_col, ascending=ascending).reset_index(drop=True)
+    _render_colored_table(
+        sorted_df, num_cols=_OEE_NUM_COLS, color_funcs={"OEE %": _color_oee}
+    )
+    st.caption(f"Period: {period_label}")
+
+    st.divider()
+
+    _chart_title_with_info("Option 2 — native table (click a column header to sort)")
+    styler = latest.style.map(
+        lambda v: f"background-color:{_color_oee(v)}" if (pd.notna(v) and _color_oee(v)) else "",
+        subset=["OEE %"],
+    ).format({c: "{:.1f}" for c in _OEE_NUM_COLS})
+    st.dataframe(styler, use_container_width=True, hide_index=True)
+    st.caption(f"Period: {period_label}")
 
 
 def _view_module_robots(date_from_str, date_to_str, aggregation):
