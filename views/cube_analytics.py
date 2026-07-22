@@ -58,10 +58,10 @@ METRIC_INFO = {
     "Errors caused by Facility %": "Percentage of total robot errors caused by facility/technical problems (is_bin_quality=False). These are mechanical or infrastructure issues requiring maintenance or engineering intervention.",
     "Errors caused by Operations": "Count of robot errors caused by operations problems (is_bin_quality=True and is_port=False). Bin handling issues.",
     "Errors caused by Facility": "Count of robot errors caused by facility/technical problems (is_bin_quality=False). Mechanical or infrastructure issues.",
-    "Time to Recover - Error Stop": "Median minutes the system was down when force-stopped by a robot error (uptime endpoint, stop code XHANDLER_ROBOT_ERROR_FAILED; down_seconds = STOPPED -> RUNNING). This is a human-response metric: how fast operators recover a hard stop. Lower is better.",
-    "Time to Recover - Manual Stop": "Median minutes the system was down when a human stopped it \u2014 an operator console stop (STOPPED_FROM_CONSOLE) or a key switch left disarmed after restart (KEYLOCK_DISARMED). A human-response metric. Lower is better.",
-    "Recovery Events - Error Stop": "Number of times the system was force-stopped by a robot error and had to be recovered, per period.",
-    "Recovery Events - Manual Stop": "Number of human-initiated (console or key-lock) stop/fix/restart cycles per period.",
+    "Time to Recover \u2014 Errors causing system stops": "Median minutes the system was down when force-stopped by a robot error (uptime endpoint; any fault stop code such as MISSING_GAP, BRAKE_FAILURE, RETRANS_MISSING_AP, ROBOT_DOOR_STOP; down_seconds = STOPPED -> RUNNING). This is a human-response metric: how fast operators recover a hard stop. Lower is better.",
+    "Time to Recover \u2014 Manual stops": "Median minutes the system was down when a human stopped it \u2014 an operator console stop (STOPPED_FROM_CONSOLE) or a key switch left disarmed after restart (KEYLOCK_DISARMED). A human-response metric. Lower is better.",
+    "Errors causing system stops": "Number of times the system was force-stopped by a robot error (any fault stop code) and had to be recovered, per period. Matches the AutoStore portal 'Errors causing system stops' count.",
+    "Manual stops": "Number of human-initiated (console or key-lock) stop/fix/restart cycles per period. Matches the AutoStore portal 'Manual stops' count.",
     "Bins Outside": "Number of bins located outside the operational grid (e.g. at a port or service position) rather than in a storage cell, from the daily installation-data snapshot. Persistent or rising counts can indicate bins stuck at ports or awaiting rescue.",
 }
 
@@ -1082,18 +1082,19 @@ def _aggregate_recovery(df, category, agg_mode, how):
 _RECOVERY_META = {
     "recover_error": {
         "category": "error_stop",
-        "caption": "System was force-stopped by a robot error (stop code XHANDLER_ROBOT_ERROR_FAILED). "
+        "caption": "System was force-stopped by a robot error (any fault stop code \u2014 e.g. "
+                   "MISSING_GAP, BRAKE_FAILURE, RETRANS_MISSING_AP, ROBOT_DOOR_STOP). "
                    "Recovery = minutes from STOPPED to RUNNING again (median per period).",
-        "time_title": "Time to Recover - Error Stop",
-        "count_title": "Recovery Events - Error Stop",
+        "time_title": "Time to Recover \u2014 Errors causing system stops",
+        "count_title": "Errors causing system stops",
     },
     "recover_manual": {
         "category": "manual",
         "caption": "System was stopped by a human \u2014 an operator console stop (STOPPED_FROM_CONSOLE) "
                    "or a key switch left disarmed after restart (KEYLOCK_DISARMED). "
                    "Recovery = minutes from STOPPED to RUNNING (median per period).",
-        "time_title": "Time to Recover - Manual Stop",
-        "count_title": "Recovery Events - Manual Stop",
+        "time_title": "Time to Recover \u2014 Manual stops",
+        "count_title": "Manual stops",
     },
 }
 
@@ -1156,8 +1157,8 @@ def _view_health_index(date_from_str, date_to_str, aggregation):
                 "uptime": "Uptime %", "wait_bin": "Wait Bin (s)", "waste_time": "Waste Time (s)",
                 "average_battery_score": "Battery Score", "packet_loss": "Packet Loss %",
                 "mtbf_h": "MTBF (h)", "mbbd": "MBBD",
-                "recover_error": "Time to Recover – Error Stop (min)",
-                "recover_manual": "Time to Recover – Manual Stop (min)",
+                "recover_error": "Time to Recover – Errors causing system stops (min)",
+                "recover_manual": "Time to Recover – Manual stops (min)",
             }.get(k, k),
             key="cube_explore_metric",
         )
