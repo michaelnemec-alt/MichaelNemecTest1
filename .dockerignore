@@ -1,0 +1,12 @@
+# Keep the image small and never bake secrets in.
+.streamlit/secrets.toml
+.env
+.venv/
+.git/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.png
+tests/
+.devcontainer/
+_scratch_*.py

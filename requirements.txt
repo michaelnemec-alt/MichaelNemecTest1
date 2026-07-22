@@ -3,5 +3,6 @@ pandas>=2.0.0
 numpy>=1.24.0
 matplotlib>=3.7.0
 plotly>=5.18.0
+pyarrow<25  # 25.0.0 has a known segfault (apache/arrow#50471)
 requests>=2.31.0
 snowflake-connector-python[pandas]>=3.6.0

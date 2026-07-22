@@ -1,0 +1,23 @@
+services:
+  app:
+    build: .
+    image: autostore-analytics:latest
+    container_name: autostore-analytics
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      # Provided via a .env file next to this compose file (git-ignored).
+      CUBEANALYTICS_TOKEN: ${CUBEANALYTICS_TOKEN:?set CUBEANALYTICS_TOKEN in .env}
+      # Optional — only needed for the Snowflake-backed pages.
+      SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT:-}
+      SNOWFLAKE_USER: ${SNOWFLAKE_USER:-}
+      SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD:-}
+    volumes:
+      # Persist the on-disk @st.cache_data across restarts (Streamlit writes its
+      # disk cache under $HOME/.streamlit, i.e. /root/.streamlit in the image).
+      - autostore-cache:/root/.streamlit
+    mem_limit: 3g
+
+volumes:
+  autostore-cache:
