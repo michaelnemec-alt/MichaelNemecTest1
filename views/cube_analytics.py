@@ -99,8 +99,18 @@ def _hex_to_rgba(hex_color, alpha):
 def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=None, pct=False):
     fig = go.Figure()
     sites = pivot_df.columns.tolist()
-    site_means = {s: pivot_df[s].mean() for s in sites}
-    sorted_sites = sorted(sites, key=lambda s: site_means.get(s, 0), reverse=True)
+
+    # Traces are added top-to-bottom in this order, and plotly's unified hover
+    # lists them in that same trace order (it does not re-sort by value per point).
+    # Order by the latest period's value so the hover box reads high->low at the
+    # most-recent point (what users inspect); fall back to the series mean, then 0.
+    def _rank(site):
+        col = pivot_df[site].dropna()
+        if len(col):
+            return col.iloc[-1]
+        m = pivot_df[site].mean()
+        return m if pd.notna(m) else float("-inf")
+    sorted_sites = sorted(sites, key=_rank, reverse=True)
     color_map = {site: SITE_COLORS[i % len(SITE_COLORS)] for i, site in enumerate(sites)}
     highlighted = st.session_state.get("cube_highlight", [])
     highlight_set = {s for s in highlighted if s in sites}
@@ -152,7 +162,7 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
         x0=0, y0=0, x1=1, y1=1,
         line=dict(color="#e0e0e0", width=1),
     )
-    fig.update_xaxes(showgrid=False)
+    fig.update_xaxes(showgrid=False, type="category")
     fig.update_yaxes(gridcolor="#eee", gridwidth=1)
     return fig
 
