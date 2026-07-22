@@ -48,8 +48,7 @@ st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-
 PAGES = ["Home", "Reporting & Data Tools *", "System OEE *"]
 OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Performance KPI", "Facility KPI *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
-SYSTEM_KPI_VIEWS = ["Availability KPI", "Error & Health Metrics *", "AutoStore system *"]
-ERROR_HEALTH_VIEWS = ["Uptime metrics", "Robots", "Ports", "Chargers", "System"]
+SYSTEM_KPI_VIEWS = ["Availability KPI", "System", "Ports", "Robots", "Chargers", "Error & Health Metrics", "AutoStore system *"]
 FACILITY_VIEWS = ["Time to Recover", "Reliability", "Incidents"]
 AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
 
@@ -67,7 +66,6 @@ if not selected:
 reporting_view = None
 oee_view = None
 system_view = None
-error_health_view = None
 facility_view = None
 autostore_view = None
 
@@ -97,15 +95,7 @@ if selected == "System OEE *":
             key="system_kpi_nav_selection",
             label_visibility="collapsed",
         ) or "Availability KPI"
-        if system_view == "Error & Health Metrics *":
-            error_health_view = st.segmented_control(
-                "error_health_nav",
-                options=ERROR_HEALTH_VIEWS,
-                default="Uptime metrics",
-                key="error_health_nav_selection",
-                label_visibility="collapsed",
-            ) or "Uptime metrics"
-        elif system_view == "AutoStore system *":
+        if system_view == "AutoStore system *":
             autostore_view = st.segmented_control(
                 "autostore_nav",
                 options=AUTOSTORE_VIEWS,
@@ -192,11 +182,8 @@ elif selected == "System OEE *":
             render_autostore(autostore_view or "Versions of Systems")
         else:
             from views.cube_analytics import render
-            if system_view == "Availability KPI":
-                render("Availability KPI")
-            else:
-                logger.info("Rendering Error & Health sub-view: %s", error_health_view)
-                render(error_health_view or "Uptime metrics")
+            logger.info("Rendering System OEE sub-view: %s", system_view)
+            render(system_view)
     elif oee_view == "Performance KPI":
         from views.cube_analytics import render
         render("Performance KPI")
