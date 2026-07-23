@@ -308,24 +308,33 @@ def _overlay_capacity(ax, df_wait, base_date, target_date):
     x_num = mdates.date2num([base_date + pd.Timedelta(hours=h) for h in hours])
     w = 0.34 / 24.0
 
+    # Align a secondary axis so its 0 lands on the scatter's 0-minute line.
+    ymin, ymax = ax.get_ylim()
+    def _aligned_ylim(top):
+        if ymin < 0 < ymax:
+            f = (0 - ymin) / (ymax - ymin)
+            return (-top * f / (1 - f), top)
+        return (0, top)
+
     ax_sec = ax.twinx()
     ax_sec.spines["right"].set_position(("axes", 1.055))
     ax_sec.set_zorder(ax.get_zorder() - 1)
     ax.patch.set_visible(False)
-    ax_sec.bar(x_num - w / 2, bin_time, width=w, color="#3f76c4", alpha=0.6,
+    ax_sec.bar(x_num - w / 2, bin_time, width=w, color="#3f76c4", alpha=0.35,
                label="Bin wait time (s)")
-    ax_sec.bar(x_num + w / 2, user_time, width=w, color="#e8c24a", alpha=0.6,
+    ax_sec.bar(x_num + w / 2, user_time, width=w, color="#e8c24a", alpha=0.35,
                label="Operator handling time (s)")
     ax_sec.axhline(_CAPACITY_TARGET_SEC, color="#c0392b", linestyle="--",
                    linewidth=1.4, label=f"Target {_CAPACITY_TARGET_SEC:.0f} s")
-    ax_sec.set_ylim(0, _CAPACITY_MAX_SEC)
+    ax_sec.set_ylim(*_aligned_ylim(_CAPACITY_MAX_SEC))
     ax_sec.set_ylabel("Time (seconds)", fontsize=13)
 
+    bins_top = max(bins) * 1.05 if any(bins) else 1.0
     ax_bins = ax.twinx()
     ax_bins.spines["right"].set_position(("axes", 1.11))
     ax_bins.plot(x_num, bins, color="#111111", linewidth=2, marker="o",
                  markersize=3.5, label="Bins picked / hour (cat 1+2)")
-    ax_bins.set_ylim(bottom=0)
+    ax_bins.set_ylim(*_aligned_ylim(bins_top))
     ax_bins.set_ylabel("Bins picked / hour", fontsize=13)
 
     h1, l1 = ax_sec.get_legend_handles_labels()
