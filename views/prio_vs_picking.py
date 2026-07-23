@@ -12,8 +12,12 @@ from cubeanalytics_utils import is_api_configured, get_installations, query_port
 
 
 def _generate_chart(data, autostore_num, warehouse_name, full_data=None,
-                    target_date=None, plan_planned=None):
-    fig, ax = plt.subplots(figsize=(24, 10), dpi=150)
+                    target_date=None, plan_planned=None, ax=None):
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=(24, 10), dpi=150)
+    else:
+        fig = ax.figure
     ax.set_facecolor("#f8f8f8")
     fig.patch.set_facecolor("white")
     ax.grid(True, alpha=0.3, color="#cccccc")
@@ -61,7 +65,7 @@ def _generate_chart(data, autostore_num, warehouse_name, full_data=None,
     ax.yaxis.set_major_locator(plt.MultipleLocator(100))
     ax.yaxis.set_minor_locator(plt.MultipleLocator(50))
     ax.grid(which="minor", axis="y", alpha=0.2, color="#cccccc", linestyle="--")
-    plt.xticks(rotation=45, ha="right")
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
 
     if full_data is not None and target_date is not None:
         ax2 = ax.twinx()
@@ -102,7 +106,8 @@ def _generate_chart(data, autostore_num, warehouse_name, full_data=None,
 
         ax2.legend(loc="upper right", fontsize=11, framealpha=0.9)
 
-    plt.tight_layout()
+    if own_fig:
+        fig.tight_layout()
     return fig
 
 
@@ -139,6 +144,8 @@ _AS_ENV = {91: "Chilled", 92: "Ambient"}
 _CAPACITY_CATEGORIES = ["1", "2"]
 # Target for average wait time (left axis, seconds).
 _CAPACITY_TARGET_SEC = 7.0
+# Cap the wait-time (left) axis so outlier hours don't flatten the chart.
+_CAPACITY_MAX_SEC = 10.0
 
 # Best-effort default: map a picking-export warehouse code (e.g. "hu.bud2") to a
 # CubeAnalytics site (city). The user can always override via the site selector.
@@ -218,16 +225,20 @@ def _capacity_hourly(df_wait, target_date):
     return hours, bin_time, user_time, bins
 
 
-def _capacity_chart(df_wait, autostore_num, warehouse_name, target_date, site_name):
+def _capacity_chart(df_wait, autostore_num, warehouse_name, target_date, site_name, ax=None):
     """Combo chart mirroring 'AS Max capacity utilization':
 
     blue columns = avg Bin wait time, yellow columns = avg Operator handling time
-    (left axis, seconds), continuous line = bins picked per hour (right axis).
-    Pick tasks category 1 + 2 only.
+    (left axis, seconds, capped at _CAPACITY_MAX_SEC), continuous line = bins
+    picked per hour (right axis). Pick tasks category 1 + 2 only.
     """
     hours, bin_time, user_time, bins = _capacity_hourly(df_wait, target_date)
 
-    fig, ax = plt.subplots(figsize=(24, 6), dpi=150)
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=(24, 6), dpi=150)
+    else:
+        fig = ax.figure
     ax.set_facecolor("#f8f8f8")
     fig.patch.set_facecolor("white")
     ax.grid(True, axis="y", alpha=0.3, color="#cccccc")
@@ -246,6 +257,7 @@ def _capacity_chart(df_wait, autostore_num, warehouse_name, target_date, site_na
     ax.set_xlabel("Hour", fontsize=13)
     ax.set_xticks(x)
     ax.set_xticklabels([f"{h:02d}" for h in hours])
+    ax.set_ylim(0, _CAPACITY_MAX_SEC)
 
     ax2 = ax.twinx()
     ax2.plot(x, bins, color="#111111", linewidth=2.2, marker="o", markersize=4,
@@ -264,35 +276,38 @@ def _capacity_chart(df_wait, autostore_num, warehouse_name, target_date, site_na
     ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left",
               fontsize=11, framealpha=0.9)
 
-    plt.tight_layout()
+    if own_fig:
+        fig.tight_layout()
     return fig
 
 
-def _render_capacity_section(autostore_num, site_map, selected_site, target_date, warehouse):
-    """Fetch port-wait data for the mapped installation and render the combo chart."""
+def _load_wait_df(autostore_num, site_map, selected_site, target_date):
+    """Fetch port-wait data (UNIFY Pivot Ready source) for the mapped installation."""
     env = _AS_ENV.get(autostore_num)
     inst_id = site_map.get(selected_site, {}).get(env)
     if not inst_id:
         st.info(f"No CubeAnalytics {env} installation found for site '{selected_site}'.")
-        return
+        return None
     with st.spinner(f"Loading capacity data (AS{autostore_num} / {env})..."):
         try:
-            df_wait = query_port_wait_time(
+            return query_port_wait_time(
                 inst_id, str(target_date), str(target_date + timedelta(days=1))
             )
         except Exception as e:
             st.error(f"Capacity data query failed: {e}")
-            return
+            return None
 
-    fig = _capacity_chart(df_wait, autostore_num, warehouse, target_date, selected_site)
-    st.pyplot(fig)
-    st.download_button(
-        f"Download PNG — AS{autostore_num} capacity",
-        data=_fig_to_bytes(fig),
-        file_name=f"capacity_{selected_site}_as{autostore_num}_{target_date}.png",
-        mime="image/png", key=f"dl_cap_{autostore_num}",
-    )
-    plt.close(fig)
+
+def _combined_chart(scatter_data, df_wait, autostore_num, warehouse, full_data,
+                    target_date, plan_planned, site_name):
+    """Stack the Prio-vs-Picking scatter and the hourly capacity combo in one figure."""
+    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(24, 16), dpi=150)
+    fig.patch.set_facecolor("white")
+    _generate_chart(scatter_data, autostore_num, warehouse, full_data=full_data,
+                    target_date=target_date, plan_planned=plan_planned, ax=ax_top)
+    _capacity_chart(df_wait, autostore_num, warehouse, target_date, site_name, ax=ax_bot)
+    fig.tight_layout()
+    return fig
 
 
 def render():
@@ -445,15 +460,17 @@ def render():
         c5.metric("Late", f"{stats_91['Late %']}%")
         c6.metric("Median", f"{stats_91['Median same-day (min)']} min")
 
-        fig_91 = _generate_chart(df_91_scatter, 91, warehouse,
-                                  full_data=df_91, target_date=target_date, plan_planned=plan_planned)
+        df_wait_91 = _load_wait_df(91, cap_site_map, cap_site, target_date) if (show_capacity and cap_site) else None
+        if df_wait_91 is not None:
+            fig_91 = _combined_chart(df_91_scatter, df_wait_91, 91, warehouse,
+                                     df_91, target_date, plan_planned, cap_site)
+        else:
+            fig_91 = _generate_chart(df_91_scatter, 91, warehouse,
+                                     full_data=df_91, target_date=target_date, plan_planned=plan_planned)
         st.pyplot(fig_91)
         st.download_button("Download PNG — AS91", data=_fig_to_bytes(fig_91),
                            file_name=f"prio_vs_picking_{warehouse}_as91.png", mime="image/png", key="dl_91")
         plt.close(fig_91)
-
-        if show_capacity and cap_site:
-            _render_capacity_section(91, cap_site_map, cap_site, target_date, warehouse)
     else:
         st.warning("No data for AutoStore 91")
 
@@ -469,15 +486,17 @@ def render():
         c5.metric("Late", f"{stats_92['Late %']}%")
         c6.metric("Median", f"{stats_92['Median same-day (min)']} min")
 
-        fig_92 = _generate_chart(df_92_scatter, 92, warehouse,
-                                  full_data=df_92, target_date=target_date, plan_planned=plan_planned)
+        df_wait_92 = _load_wait_df(92, cap_site_map, cap_site, target_date) if (show_capacity and cap_site) else None
+        if df_wait_92 is not None:
+            fig_92 = _combined_chart(df_92_scatter, df_wait_92, 92, warehouse,
+                                     df_92, target_date, plan_planned, cap_site)
+        else:
+            fig_92 = _generate_chart(df_92_scatter, 92, warehouse,
+                                     full_data=df_92, target_date=target_date, plan_planned=plan_planned)
         st.pyplot(fig_92)
         st.download_button("Download PNG — AS92", data=_fig_to_bytes(fig_92),
                            file_name=f"prio_vs_picking_{warehouse}_as92.png", mime="image/png", key="dl_92")
         plt.close(fig_92)
-
-        if show_capacity and cap_site:
-            _render_capacity_section(92, cap_site_map, cap_site, target_date, warehouse)
     else:
         st.warning("No data for AutoStore 92")
 
