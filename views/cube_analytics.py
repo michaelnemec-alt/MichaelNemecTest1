@@ -15,7 +15,8 @@ logger = logging.getLogger("cube_analytics")
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_robot_state, query_bin_presentations,
-    query_port_wait_time_daily, query_port_uptime, query_incidents, query_robot_errors,
+    query_port_wait_time_daily, query_port_uptime, query_port_uptime_per_port,
+    query_incidents, query_robot_errors,
     query_recovery_times, query_installation_data, query_module_versions, query_bins_above,
     query_bin_usage,
 )
@@ -346,6 +347,8 @@ def render(selected_view="Overview & Health"):
             _view_module_robots(date_from_str, date_to_str, aggregation)
         elif selected_view == "Ports":
             _view_module_ports(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Port Detailed Overview":
+            _view_port_detail(date_from_str, date_to_str, aggregation)
         elif selected_view == "Chargers":
             _view_module_chargers(date_from_str, date_to_str, aggregation)
         elif selected_view == "System":
@@ -1471,6 +1474,115 @@ def _view_module_ports(date_from_str, date_to_str, aggregation):
             "A port-level reliability metric — higher is better.",
         )
         st.plotly_chart(_make_trend_chart(pivot, "MBBD (Mean Bins Between Downtime)", "Bins"), use_container_width=True)
+
+
+def _view_port_detail(date_from_str, date_to_str, aggregation):
+    st.markdown("#### Ports — Detailed Overview")
+    st.caption(
+        "Per-port uptime for a single site, so you can spot which ports drag the "
+        "site's Port Uptime down. Uptime % = time the port was open or closed "
+        "(working) ÷ total time; downtime/stopped/disabled count against it."
+    )
+
+    try:
+        installations = get_installations()
+    except Exception as e:
+        st.error(f"Failed to fetch installations: {e}")
+        return
+    site_names = sorted(inst["name"] for inst in installations)
+    if not site_names:
+        st.warning("No sites available.")
+        return
+
+    name_to_id = {inst["name"]: inst["id"] for inst in installations}
+    selected_site = st.selectbox(
+        "Site", site_names, index=0, key="port_detail_site",
+        format_func=_short_site,
+    )
+    inst_id = name_to_id[selected_site]
+
+    with st.spinner("Loading per-port metrics..."):
+        df = query_port_uptime_per_port(inst_id, date_from_str, date_to_str)
+    if df.empty:
+        st.warning("No per-port data returned for this site and period.")
+        return
+
+    # Time-weighted aggregate per port across the selected period.
+    g = df.groupby("port", as_index=False).agg(
+        open_seconds=("open_seconds", "sum"),
+        closed_seconds=("closed_seconds", "sum"),
+        downtime_seconds=("downtime_seconds", "sum"),
+        stopped_seconds=("stopped_seconds", "sum"),
+        disabled_seconds=("disabled_seconds", "sum"),
+        down_periods=("down_periods", "sum"),
+        utilization_pct=("utilization_pct", "mean"),
+    )
+    total = (g["open_seconds"] + g["closed_seconds"] + g["downtime_seconds"]
+             + g["stopped_seconds"] + g["disabled_seconds"])
+    g["uptime_pct"] = ((g["open_seconds"] + g["closed_seconds"]) / total * 100).where(total > 0, 0.0)
+    g["downtime_min"] = (g["downtime_seconds"] + g["stopped_seconds"] + g["disabled_seconds"]) / 60.0
+    g["port_num"] = pd.to_numeric(g["port"], errors="coerce")
+    g = g.sort_values("uptime_pct", ascending=True).reset_index(drop=True)
+
+    site_avg = g["uptime_pct"].mean()
+
+    def _bar_color(u):
+        if u < site_avg - 1:
+            return "#c0392b"
+        if u < site_avg:
+            return "#e8873a"
+        return "#7ab648"
+
+    colors = [_bar_color(u) for u in g["uptime_pct"]]
+    labels = [f"Port {p}" for p in g["port"]]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=g["uptime_pct"], y=labels, orientation="h",
+        marker_color=colors,
+        text=[f"{u:.1f}%  ({m:.0f} min down, {int(dp)} outages)"
+              for u, m, dp in zip(g["uptime_pct"], g["downtime_min"], g["down_periods"])],
+        textposition="outside", cliponaxis=False,
+        hovertemplate="%{y}: %{x:.2f}% uptime<extra></extra>",
+    ))
+    fig.add_vline(x=site_avg, line_dash="dash", line_color="#1F3864",
+                  annotation_text=f"site avg {site_avg:.1f}%", annotation_position="top")
+    x_lo = max(0, min(g["uptime_pct"].min() - 1, 95))
+    fig.update_xaxes(range=[x_lo, 100.6], title="Uptime %", showgrid=True, gridcolor="#eee")
+    fig.update_layout(
+        height=max(320, 26 * len(g)),
+        margin=dict(l=10, r=140, t=10, b=10),
+        plot_bgcolor="white", showlegend=False,
+    )
+    _chart_title_with_info(
+        "Per-port Uptime",
+        f"Uptime per port for {_short_site(selected_site)}, worst first. Red = more than "
+        "1pp below the site average, orange = below average, green = at/above. "
+        "The dashed line is the site average.",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    tbl = g.sort_values(["port_num", "port"]).copy()
+    tbl["Port"] = tbl["port"].apply(lambda p: f"Port {p}")
+    tbl = tbl.rename(columns={
+        "uptime_pct": "Uptime %", "downtime_min": "Downtime (min)",
+        "down_periods": "Outages", "utilization_pct": "Utilization %",
+    })
+    tbl["Downtime (min)"] = tbl["Downtime (min)"].round(0)
+    tbl["Outages"] = tbl["Outages"].astype(int)
+    show = tbl[["Port", "Uptime %", "Downtime (min)", "Outages", "Utilization %"]]
+    _render_colored_table(
+        show,
+        num_cols=["Uptime %", "Downtime (min)", "Outages", "Utilization %"],
+        color_funcs={"Uptime %": _color_availability},
+    )
+
+    st.divider()
+    csv_bytes = show.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download per-port data", data=csv_bytes,
+        file_name=f"port_detail_{_short_site(selected_site)}_{date_from_str}_{date_to_str}.csv",
+        mime="text/csv", key="dl_port_detail",
+    )
 
 
 def _view_module_chargers(date_from_str, date_to_str, aggregation):

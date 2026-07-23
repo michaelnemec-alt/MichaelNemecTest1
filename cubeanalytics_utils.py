@@ -354,6 +354,46 @@ def query_port_uptime(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=86400, persist="disk")
+def query_port_uptime_per_port(installation_id, date_from_str, date_to_str):
+    """Per (date, port) uptime metrics for a single installation.
+
+    Unlike query_port_uptime (which averages every port into one site figure),
+    this keeps each port separate so a single site can be broken down port by
+    port. uptime_percentage from the API = (open + closed) / (all states).
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/port-uptime/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        d = day_result.get("date")
+        pm = day_result.get("result", {}).get("port_metrics", {})
+        if not pm:
+            continue
+        items = pm.items() if isinstance(pm, dict) else enumerate(pm)
+        for pid, p in items:
+            rows.append({
+                "date": d,
+                "port": str(pid),
+                "uptime_pct": (p.get("uptime_percentage") or 0) * 100,
+                "utilization_pct": (p.get("utilization") or 0) * 100,
+                "open_seconds": p.get("open_seconds", 0) or 0,
+                "closed_seconds": p.get("closed_seconds", 0) or 0,
+                "downtime_seconds": p.get("downtime_seconds", 0) or 0,
+                "stopped_seconds": p.get("stopped_seconds", 0) or 0,
+                "disabled_seconds": p.get("disabled_seconds", 0) or 0,
+                "down_periods": p.get("total_down_periods", 0) or 0,
+            })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=86400, persist="disk")
 def query_incidents(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/incidents/"
     params = {"after": date_from_str, "before": date_to_str}
