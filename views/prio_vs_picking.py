@@ -137,6 +137,8 @@ def _fig_to_bytes(fig):
 # AutoStore number -> environment: 91 = non-ambient (Chilled), 92 = Ambient.
 _AS_ENV = {91: "Chilled", 92: "Ambient"}
 _CAPACITY_CATEGORIES = ["1", "2"]
+# Target for average wait time (left axis, seconds).
+_CAPACITY_TARGET_SEC = 7.0
 
 # Best-effort default: map a picking-export warehouse code (e.g. "hu.bud2") to a
 # CubeAnalytics site (city). The user can always override via the site selector.
@@ -236,6 +238,10 @@ def _capacity_chart(df_wait, autostore_num, warehouse_name, target_date, site_na
            label="Average bin wait time")
     ax.bar(x + width / 2, user_time, width, color="#e8c24a",
            label="Average operator handling time")
+    ax.axhline(
+        _CAPACITY_TARGET_SEC, color="#c0392b", linestyle="--", linewidth=1.6,
+        label=f"Target {_CAPACITY_TARGET_SEC:.0f} s",
+    )
     ax.set_ylabel("Seconds (avg per bin)", fontsize=13)
     ax.set_xlabel("Hour", fontsize=13)
     ax.set_xticks(x)
