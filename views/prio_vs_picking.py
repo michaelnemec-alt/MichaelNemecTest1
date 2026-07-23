@@ -298,15 +298,56 @@ def _load_wait_df(autostore_num, site_map, selected_site, target_date):
             return None
 
 
+def _overlay_capacity(ax, df_wait, base_date, target_date):
+    """Overlay hourly capacity data onto the scatter axes on their own y-axes.
+
+    Bin wait / operator handling times (bars, seconds) sit behind the scatter on
+    a right-hand seconds axis; bins picked/hour is a line on a further-right axis.
+    """
+    hours, bin_time, user_time, bins = _capacity_hourly(df_wait, target_date)
+    x_num = mdates.date2num([base_date + pd.Timedelta(hours=h) for h in hours])
+    w = 0.34 / 24.0
+
+    ax_sec = ax.twinx()
+    ax_sec.spines["right"].set_position(("axes", 1.055))
+    ax_sec.set_zorder(ax.get_zorder() - 1)
+    ax.patch.set_visible(False)
+    ax_sec.bar(x_num - w / 2, bin_time, width=w, color="#3f76c4", alpha=0.6,
+               label="Bin wait time (s)")
+    ax_sec.bar(x_num + w / 2, user_time, width=w, color="#e8c24a", alpha=0.6,
+               label="Operator handling time (s)")
+    ax_sec.axhline(_CAPACITY_TARGET_SEC, color="#c0392b", linestyle="--",
+                   linewidth=1.4, label=f"Target {_CAPACITY_TARGET_SEC:.0f} s")
+    ax_sec.set_ylim(0, _CAPACITY_MAX_SEC)
+    ax_sec.set_ylabel("Time (seconds)", fontsize=13)
+
+    ax_bins = ax.twinx()
+    ax_bins.spines["right"].set_position(("axes", 1.11))
+    ax_bins.plot(x_num, bins, color="#111111", linewidth=2, marker="o",
+                 markersize=3.5, label="Bins picked / hour (cat 1+2)")
+    ax_bins.set_ylim(bottom=0)
+    ax_bins.set_ylabel("Bins picked / hour", fontsize=13)
+
+    h1, l1 = ax_sec.get_legend_handles_labels()
+    h2, l2 = ax_bins.get_legend_handles_labels()
+    ax_sec.legend(h1 + h2, l1 + l2, loc="lower left", fontsize=11, framealpha=0.9)
+
+
 def _combined_chart(scatter_data, df_wait, autostore_num, warehouse, full_data,
                     target_date, plan_planned, site_name):
-    """Stack the Prio-vs-Picking scatter and the hourly capacity combo in one figure."""
-    fig, (ax_top, ax_bot) = plt.subplots(2, 1, figsize=(24, 16), dpi=150)
+    """Prio-vs-Picking scatter with hourly capacity data overlaid in one chart."""
+    fig, ax = plt.subplots(figsize=(26, 11), dpi=150)
     fig.patch.set_facecolor("white")
     _generate_chart(scatter_data, autostore_num, warehouse, full_data=full_data,
-                    target_date=target_date, plan_planned=plan_planned, ax=ax_top)
-    _capacity_chart(df_wait, autostore_num, warehouse, target_date, site_name, ax=ax_bot)
-    fig.tight_layout()
+                    target_date=target_date, plan_planned=plan_planned, ax=ax)
+    base_date = scatter_data["Finished Picking At"].dt.normalize().iloc[0]
+    _overlay_capacity(ax, df_wait, base_date, target_date)
+    ax.set_title(
+        f"Prio vs Picking + capacity — AutoStore {autostore_num} "
+        f"({_AS_ENV.get(autostore_num, '')})\n{site_name} | {target_date}",
+        fontsize=16, fontweight="bold",
+    )
+    fig.subplots_adjust(right=0.86)
     return fig
 
 
