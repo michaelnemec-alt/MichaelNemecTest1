@@ -171,15 +171,6 @@ def _make_trend_chart(pivot_df, title, ylabel, threshold=None, threshold_label=N
 _WEEKDAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 
-def _current_period_start(agg_mode):
-    today = pd.Timestamp.today().normalize()
-    if agg_mode == "Week":
-        return today - pd.Timedelta(days=today.weekday())
-    elif agg_mode == "Month":
-        return today.replace(day=1)
-    return today
-
-
 def _aggregate_pivot(df, value_col, agg_mode):
     df = df.copy()
     if agg_mode == "Week":
@@ -188,9 +179,6 @@ def _aggregate_pivot(df, value_col, agg_mode):
         df["period"] = df["date"].dt.to_period("M").dt.start_time
     else:
         df["period"] = df["date"]
-    if agg_mode in ("Week", "Month"):
-        cutoff = _current_period_start(agg_mode)
-        df = df[df["period"] < cutoff]
     grouped = df.groupby(["site", "period"])[value_col].mean().reset_index()
     pivot = grouped.pivot(index="period", columns="site", values=value_col).sort_index()
     if agg_mode == "Week":
@@ -203,9 +191,6 @@ def _aggregate_pivot(df, value_col, agg_mode):
 
 
 def _format_pivot_index(pivot, mode):
-    if mode in ("Week", "Month"):
-        cutoff = _current_period_start(mode)
-        pivot = pivot[pivot.index < cutoff]
     if mode == "Week":
         pivot.index = pivot.index.strftime("W%V %Y")
     elif mode == "Month":
@@ -999,8 +984,6 @@ def _render_perf_filtered(df_pwt, selected_chart, agg_mode):
         wt["period"] = wt["date"].dt.to_period("M").dt.start_time
     else:
         wt["period"] = wt["date"]
-    if agg_mode in ("Week", "Month"):
-        wt = wt[wt["period"] < _current_period_start(agg_mode)]
 
     agg = wt.groupby(["site", "period"]).agg(
         total_count=("count", "sum"),
@@ -1045,9 +1028,6 @@ def _aggregate_pivot_sum(df, value_col, agg_mode):
         df["period"] = df["date"].dt.to_period("M").dt.start_time
     else:
         df["period"] = df["date"]
-    if agg_mode in ("Week", "Month"):
-        cutoff = _current_period_start(agg_mode)
-        df = df[df["period"] < cutoff]
     grouped = df.groupby(["site", "period"])[value_col].sum().reset_index()
     pivot = grouped.pivot(index="period", columns="site", values=value_col).sort_index()
     if agg_mode == "Week":
@@ -1073,8 +1053,6 @@ def _aggregate_recovery(df, category, agg_mode, how):
         df["period"] = df["date"].dt.to_period("M").dt.start_time
     else:
         df["period"] = df["date"]
-    if agg_mode in ("Week", "Month"):
-        df = df[df["period"] < _current_period_start(agg_mode)]
     if df.empty:
         return pd.DataFrame()
     if how == "median":
@@ -1668,11 +1646,6 @@ def _bins_between_stops_pivot(df_bins, df_recovery, agg_mode, category=None):
     if category is not None:
         r = r[r["category"] == category]
     r = _with_period(r[["site", "date"]].assign(stops=1))
-
-    if agg_mode in ("Week", "Month"):
-        cutoff = _current_period_start(agg_mode)
-        b = b[b["period"] < cutoff]
-        r = r[r["period"] < cutoff]
 
     bins_sum = b.groupby(["site", "period"])["bin_presentations"].sum()
     stops_sum = r.groupby(["site", "period"])["stops"].sum()
