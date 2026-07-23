@@ -1277,7 +1277,9 @@ def _compute_oee_table(date_from_str, date_to_str, aggregation):
     if merged.empty:
         return None
     merged["oee_pct"] = (
-        merged["availability_pct"] * merged["performance_pct"] * merged["quality_pct"] / 10000.0
+        _OEE_W_AVAIL * merged["availability_pct"]
+        + _OEE_W_PERF * merged["performance_pct"]
+        + _OEE_W_QUAL * merged["quality_pct"]
     )
 
     period_start, period_end, period_label = _period_window(aggregation)
@@ -1299,9 +1301,14 @@ def _compute_oee_table(date_from_str, date_to_str, aggregation):
     return latest, merged, period_label
 
 
+# OEE composite weights (weighted mean of the three terms). Must sum to 1.0.
+_OEE_W_AVAIL = 0.40
+_OEE_W_PERF = 0.40
+_OEE_W_QUAL = 0.20
+
 _OEE_NUM_COLS = ["Availability %", "Performance %", "Quality %", "OEE %"]
 _OEE_TABLE_INFO = (
-    "OEE = Availability × Performance × Quality, per site. "
+    "OEE = weighted mean of Availability (40%), Performance (40%) and Quality (20%), per site. "
     "Availability = composite Availability KPI (weighted mean: System 40% / Port 25% / "
     "Robot 25% / Software 10%, see Availability KPI tab). Performance = composite Performance KPI (mean of three "
     "interaction sub-scores: utilisation-adjusted flow [robot working% vs 60% with user wait "
