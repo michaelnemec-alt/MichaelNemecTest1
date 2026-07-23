@@ -1302,13 +1302,13 @@ def _compute_oee_table(date_from_str, date_to_str, aggregation):
 
 
 # OEE composite weights (weighted mean of the three terms). Must sum to 1.0.
-_OEE_W_AVAIL = 0.40
-_OEE_W_PERF = 0.40
+_OEE_W_AVAIL = 0.50
+_OEE_W_PERF = 0.30
 _OEE_W_QUAL = 0.20
 
 _OEE_NUM_COLS = ["Availability %", "Performance %", "Quality %", "OEE %"]
 _OEE_TABLE_INFO = (
-    "OEE = weighted mean of Availability (40%), Performance (40%) and Quality (20%), per site. "
+    "OEE = weighted mean of Availability (50%), Performance (30%) and Quality (20%), per site. "
     "Availability = composite Availability KPI (weighted mean: System 40% / Port 25% / "
     "Robot 25% / Software 10%, see Availability KPI tab). Performance = composite Performance KPI (mean of three "
     "interaction sub-scores: utilisation-adjusted flow [robot working% vs 60% with user wait "
