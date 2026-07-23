@@ -355,7 +355,8 @@ def _compute_availability(df_uptime, df_port, df_robot, df_versions=None):
     """Per (site, date) System/Port/Robot/Software % and their mean = Availability KPI.
 
     - System uptime % = uptime recovery_up_ratio × 100
-    - Port uptime %   = port-uptime uptime_pct
+    - Port uptime %   = (open + closed) / (open + closed + error downtime), portal
+                        definition (manual stopped/disabled time excluded)
     - Robot uptime %  = 100 − robot recovery/unavailable/service states
     - Software %      = share of the site's modules that run the fleet-latest version
                         (per-site snapshot, broadcast across all dates)
@@ -554,7 +555,9 @@ def _view_overview(date_from_str, date_to_str, aggregation, dt_from, dt_to):
         "Availability KPI = weighted mean of System uptime % (40%), Port uptime % (25%), "
         "Robot uptime % (25%), Software % (10%). "
         "System = running time ÷ total (uptime endpoint, recovery-adjusted). "
-        "Port = port operational %. Robot = 100 − robot recovery/unavailable/service time. "
+        "Port = (open + closed) ÷ (open + closed + error downtime), portal definition "
+        "(manual stops / disabled time excluded). "
+        "Robot = 100 − robot recovery/unavailable/service time. "
         "Software = share of the site's modules running the fleet-latest version. "
         "This composite feeds the Availability term of OEE.",
     )
@@ -1458,8 +1461,9 @@ def _view_port_detail(date_from_str, date_to_str, aggregation):
     st.markdown("#### Ports — Detailed Overview")
     st.caption(
         "Per-port uptime for a single site, so you can spot which ports drag the "
-        "site's Port Uptime down. Uptime % = time the port was open or closed "
-        "(working) ÷ total time; downtime/stopped/disabled count against it."
+        "site's Port Uptime down. Uptime % = time open or closed (working) ÷ "
+        "(working + error downtime), matching the CubeAnalytics portal — only "
+        "error downtime counts, manual stops and disabled time do not."
     )
 
     try:
@@ -1495,10 +1499,9 @@ def _view_port_detail(date_from_str, date_to_str, aggregation):
         down_periods=("down_periods", "sum"),
         utilization_pct=("utilization_pct", "mean"),
     )
-    total = (g["open_seconds"] + g["closed_seconds"] + g["downtime_seconds"]
-             + g["stopped_seconds"] + g["disabled_seconds"])
-    g["uptime_pct"] = ((g["open_seconds"] + g["closed_seconds"]) / total * 100).where(total > 0, 0.0)
-    g["downtime_min"] = (g["downtime_seconds"] + g["stopped_seconds"] + g["disabled_seconds"]) / 60.0
+    denom = g["open_seconds"] + g["closed_seconds"] + g["downtime_seconds"]
+    g["uptime_pct"] = ((g["open_seconds"] + g["closed_seconds"]) / denom * 100).where(denom > 0, 0.0)
+    g["downtime_min"] = g["downtime_seconds"] / 60.0
     g["port_num"] = pd.to_numeric(g["port"], errors="coerce")
     g = g.sort_values("uptime_pct", ascending=True).reset_index(drop=True)
 

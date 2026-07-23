@@ -326,19 +326,25 @@ def query_port_uptime(installation_id, date_from_str, date_to_str):
         pm = day_result.get("result", {}).get("port_metrics", {})
         if not pm:
             continue
-        ports = pm.values() if isinstance(pm, dict) else pm
+        ports = list(pm.values() if isinstance(pm, dict) else pm)
         total_open = sum(p.get("open_seconds", 0) for p in ports)
         total_closed = sum(p.get("closed_seconds", 0) for p in ports)
         total_down = sum(p.get("downtime_seconds", 0) for p in ports)
-        total_stopped = sum(p.get("stopped_seconds", 0) for p in ports)
-        total_disabled = sum(p.get("disabled_seconds", 0) for p in ports)
-        total_all = total_open + total_closed + total_down + total_stopped + total_disabled
         utils = [p.get("utilization", 0) for p in ports if p.get("utilization") is not None]
-        uptimes = [p.get("uptime_percentage", 0) for p in ports if p.get("uptime_percentage") is not None]
+        # Port uptime = (open + closed) / (open + closed + error downtime), matching the
+        # CubeAnalytics portal: only error downtime counts, manual stopped/disabled does not.
+        per_port_uptime = []
+        for p in ports:
+            o = p.get("open_seconds", 0) or 0
+            c = p.get("closed_seconds", 0) or 0
+            d = p.get("downtime_seconds", 0) or 0
+            denom = o + c + d
+            if denom:
+                per_port_uptime.append((o + c) / denom * 100)
 
         rows.append({
             "date": day_result.get("date"),
-            "uptime_pct": (sum(uptimes) / len(uptimes) * 100) if uptimes else 0,
+            "uptime_pct": (sum(per_port_uptime) / len(per_port_uptime)) if per_port_uptime else 0,
             "utilization_pct": (sum(utils) / len(utils) * 100) if utils else 0,
             "open_seconds": total_open,
             "closed_seconds": total_closed,
@@ -359,7 +365,8 @@ def query_port_uptime_per_port(installation_id, date_from_str, date_to_str):
 
     Unlike query_port_uptime (which averages every port into one site figure),
     this keeps each port separate so a single site can be broken down port by
-    port. uptime_percentage from the API = (open + closed) / (all states).
+    port. uptime_pct = (open + closed) / (open + closed + error downtime),
+    matching the portal (manual stopped/disabled time does not count against it).
     """
     url = f"{BASE_URL}/installations/{installation_id}/port-uptime/"
     params = {"after": date_from_str, "before": date_to_str}
@@ -373,10 +380,14 @@ def query_port_uptime_per_port(installation_id, date_from_str, date_to_str):
             continue
         items = pm.items() if isinstance(pm, dict) else enumerate(pm)
         for pid, p in items:
+            _o = p.get("open_seconds", 0) or 0
+            _c = p.get("closed_seconds", 0) or 0
+            _d = p.get("downtime_seconds", 0) or 0
+            _denom = _o + _c + _d
             rows.append({
                 "date": d,
                 "port": str(pid),
-                "uptime_pct": (p.get("uptime_percentage") or 0) * 100,
+                "uptime_pct": ((_o + _c) / _denom * 100) if _denom else 0.0,
                 "utilization_pct": (p.get("utilization") or 0) * 100,
                 "open_seconds": p.get("open_seconds", 0) or 0,
                 "closed_seconds": p.get("closed_seconds", 0) or 0,
