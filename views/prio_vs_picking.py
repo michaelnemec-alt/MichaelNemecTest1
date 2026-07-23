@@ -4,9 +4,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import io
+import re
 from datetime import date, timedelta
 
 from snowflake_utils import is_snowflake_configured, get_available_warehouses, query_picking_data
+from cubeanalytics_utils import is_api_configured, get_installations, query_port_wait_time
 
 
 def _generate_chart(data, autostore_num, warehouse_name, full_data=None,
@@ -132,6 +134,161 @@ def _fig_to_bytes(fig):
     return buf.getvalue()
 
 
+# AutoStore number -> environment: 91 = non-ambient (Chilled), 92 = Ambient.
+_AS_ENV = {91: "Chilled", 92: "Ambient"}
+_CAPACITY_CATEGORIES = ["1", "2"]
+
+# Best-effort default: map a picking-export warehouse code (e.g. "hu.bud2") to a
+# CubeAnalytics site (city). The user can always override via the site selector.
+_WAREHOUSE_CITY_HINTS = {
+    "bud": "Biatorbágy",
+    "prg": "Praha",
+    "vie": "Vienna",
+    "muc": "Garching",
+    "gar": "Garching",
+    "ber": "Schönefeld",
+    "sch": "Schönefeld",
+}
+
+
+def _installation_site_map():
+    """Group CubeAnalytics installations by site so AS91/AS92 map to the right one.
+
+    Returns {city: {"Chilled": id, "Ambient": id}}. The environment is parsed from
+    the installation name, which comes in two shapes: "... (Chilled)" (Praha,
+    Vienna, ...) and "... Chilled" (Garching), so the match is parenthesis-agnostic.
+    """
+    sites = {}
+    for inst in get_installations():
+        m = re.search(r"(Chilled|Ambient)", inst["name"])
+        if not m:
+            continue
+        city = inst.get("city") or inst["name"]
+        sites.setdefault(city, {})[m.group(1)] = inst["id"]
+    return sites
+
+
+def _default_capacity_site(sites, warehouse):
+    """Pick a sensible default site for the capacity overlay from the warehouse code."""
+    wh = (warehouse or "").lower()
+    for hint, city in _WAREHOUSE_CITY_HINTS.items():
+        if hint in wh and city in sites:
+            return city
+    return next(iter(sites), None)
+
+
+def _capacity_hourly(df_wait, target_date):
+    """Aggregate hourly Bin time / User time / bins-per-hour for pick tasks cat 1+2.
+
+    Uses the same source as UNIFY Pivot Ready (port-bin-wait-time):
+      Bin time  = count-weighted mean of "Average bin wait time"
+      User time = count-weighted mean of "Average operator handling time"
+      Bins/hour = sum of Count (bin presentations for picking)
+    Restricted to Pick type 'picks' and Category in {1, 2}.
+    """
+    hours = list(range(24))
+    if df_wait is None or df_wait.empty:
+        z = [0.0] * 24
+        return hours, z, z, z
+
+    d = df_wait[
+        df_wait["Category"].isin(_CAPACITY_CATEGORIES)
+        & (df_wait["Pick type"] == "picks")
+    ].copy()
+    d = d[d["Timestamp"].dt.date == target_date]
+    if d.empty:
+        z = [0.0] * 24
+        return hours, z, z, z
+
+    d["hour"] = d["Timestamp"].dt.hour
+    d["_wb"] = d["Count"] * d["Average bin wait time"]
+    d["_wu"] = d["Count"] * d["Average operator handling time"]
+    g = d.groupby("hour").agg(
+        count=("Count", "sum"), wb=("_wb", "sum"), wu=("_wu", "sum")
+    )
+
+    bin_time, user_time, bins = [], [], []
+    for h in hours:
+        c = g["count"].get(h, 0)
+        bins.append(float(c))
+        bin_time.append(float(g["wb"].get(h, 0) / c) if c else 0.0)
+        user_time.append(float(g["wu"].get(h, 0) / c) if c else 0.0)
+    return hours, bin_time, user_time, bins
+
+
+def _capacity_chart(df_wait, autostore_num, warehouse_name, target_date, site_name):
+    """Combo chart mirroring 'AS Max capacity utilization':
+
+    blue columns = avg Bin wait time, yellow columns = avg Operator handling time
+    (left axis, seconds), continuous line = bins picked per hour (right axis).
+    Pick tasks category 1 + 2 only.
+    """
+    hours, bin_time, user_time, bins = _capacity_hourly(df_wait, target_date)
+
+    fig, ax = plt.subplots(figsize=(24, 6), dpi=150)
+    ax.set_facecolor("#f8f8f8")
+    fig.patch.set_facecolor("white")
+    ax.grid(True, axis="y", alpha=0.3, color="#cccccc")
+
+    width = 0.42
+    x = np.arange(24)
+    ax.bar(x - width / 2, bin_time, width, color="#3f76c4",
+           label="Average bin wait time")
+    ax.bar(x + width / 2, user_time, width, color="#e8c24a",
+           label="Average operator handling time")
+    ax.set_ylabel("Seconds (avg per bin)", fontsize=13)
+    ax.set_xlabel("Hour", fontsize=13)
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{h:02d}" for h in hours])
+
+    ax2 = ax.twinx()
+    ax2.plot(x, bins, color="#111111", linewidth=2.2, marker="o", markersize=4,
+             label="Bins picked / hour (cat 1+2)")
+    ax2.set_ylabel("Bins picked / hour", fontsize=13)
+    ax2.set_ylim(bottom=0)
+
+    ax.set_title(
+        f"AS capacity utilization — AutoStore {autostore_num} "
+        f"({_AS_ENV.get(autostore_num, '')})\n"
+        f"Pick tasks category 1 + 2 | {site_name} | {target_date}",
+        fontsize=15, fontweight="bold",
+    )
+    lines1, labels1 = ax.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax.legend(lines1 + lines2, labels1 + labels2, loc="upper left",
+              fontsize=11, framealpha=0.9)
+
+    plt.tight_layout()
+    return fig
+
+
+def _render_capacity_section(autostore_num, site_map, selected_site, target_date, warehouse):
+    """Fetch port-wait data for the mapped installation and render the combo chart."""
+    env = _AS_ENV.get(autostore_num)
+    inst_id = site_map.get(selected_site, {}).get(env)
+    if not inst_id:
+        st.info(f"No CubeAnalytics {env} installation found for site '{selected_site}'.")
+        return
+    with st.spinner(f"Loading capacity data (AS{autostore_num} / {env})..."):
+        try:
+            df_wait = query_port_wait_time(
+                inst_id, str(target_date), str(target_date + timedelta(days=1))
+            )
+        except Exception as e:
+            st.error(f"Capacity data query failed: {e}")
+            return
+
+    fig = _capacity_chart(df_wait, autostore_num, warehouse, target_date, selected_site)
+    st.pyplot(fig)
+    st.download_button(
+        f"Download PNG — AS{autostore_num} capacity",
+        data=_fig_to_bytes(fig),
+        file_name=f"capacity_{selected_site}_as{autostore_num}_{target_date}.png",
+        mime="image/png", key=f"dl_cap_{autostore_num}",
+    )
+    plt.close(fig)
+
+
 def render():
     sf_available = is_snowflake_configured()
 
@@ -162,6 +319,14 @@ def render():
         st.divider()
         show_comparison = st.checkbox("Show AS91 vs AS92 comparison", value=True, key="prio_comp")
         show_hourly = st.checkbox("Show hourly distribution", value=True, key="prio_hourly")
+        show_capacity = st.checkbox(
+            "Show hourly capacity (Bin/User time)",
+            value=is_api_configured(),
+            key="prio_cap",
+            help="Adds a combo chart per AutoStore: avg Bin/User wait time (bars) "
+                 "and bins picked/hour (line) for pick tasks category 1+2, "
+                 "using the same CubeAnalytics source as UNIFY Pivot Ready.",
+        )
 
     df_raw = None
     if data_source == "Snowflake":
@@ -217,6 +382,25 @@ def render():
     df_91_scatter = df_91[df_91["Finished Picking At"].dt.date == target_date].copy()
     df_92_scatter = df_92[df_92["Finished Picking At"].dt.date == target_date].copy()
 
+    cap_site_map = {}
+    cap_site = None
+    if show_capacity:
+        if not is_api_configured():
+            st.info("CubeAnalytics API not configured — hourly capacity chart unavailable.")
+        else:
+            cap_site_map = _installation_site_map()
+            if cap_site_map:
+                site_options = sorted(cap_site_map.keys())
+                default_site = _default_capacity_site(cap_site_map, warehouse)
+                cap_site = st.selectbox(
+                    "CubeAnalytics site for capacity chart",
+                    options=site_options,
+                    index=site_options.index(default_site) if default_site in site_options else 0,
+                    key="prio_cap_site",
+                    help="Which CubeAnalytics installation the hourly Bin/User time "
+                         "and bins-picked-per-hour data is read from.",
+                )
+
     plan_planned = None
     if plan_file is not None:
         try:
@@ -261,6 +445,9 @@ def render():
         st.download_button("Download PNG — AS91", data=_fig_to_bytes(fig_91),
                            file_name=f"prio_vs_picking_{warehouse}_as91.png", mime="image/png", key="dl_91")
         plt.close(fig_91)
+
+        if show_capacity and cap_site:
+            _render_capacity_section(91, cap_site_map, cap_site, target_date, warehouse)
     else:
         st.warning("No data for AutoStore 91")
 
@@ -282,6 +469,9 @@ def render():
         st.download_button("Download PNG — AS92", data=_fig_to_bytes(fig_92),
                            file_name=f"prio_vs_picking_{warehouse}_as92.png", mime="image/png", key="dl_92")
         plt.close(fig_92)
+
+        if show_capacity and cap_site:
+            _render_capacity_section(92, cap_site_map, cap_site, target_date, warehouse)
     else:
         st.warning("No data for AutoStore 92")
 
