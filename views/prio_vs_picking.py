@@ -363,6 +363,12 @@ def _combined_chart(scatter_data, df_wait, autostore_num, warehouse, full_data,
 def render():
     sf_available = is_snowflake_configured()
 
+    st.markdown(
+        '<style>[data-testid="stMetricValue"]{font-size:1.55rem;}'
+        '[data-testid="stMetricLabel"]{font-size:0.8rem;}</style>',
+        unsafe_allow_html=True,
+    )
+
     with st.sidebar:
         st.markdown("#### Prio vs Picking")
         if sf_available:
