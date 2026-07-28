@@ -39,10 +39,17 @@ _UPLIFT = {"Ambient": 0.25, "Chilled": 0.40}
 
 # Commercial model per site: "PPP" (pay-per-pick billing), "Per module" (robots ×
 # monthly rent) or "CAPEX" (bought outright). Keyed by parenthesis-free short name.
-# Garching is not a PPP site; the rest are TBD until confirmed by the business.
 _SITE_MODEL = {
     "Garching Ambient": "CAPEX",
     "Garching Chilled": "CAPEX",
+    "Praha Ambient": "PPP",
+    "Praha Chilled": "PPP",
+    "Schönefeld Ambient": "PPP",
+    "Schönefeld Chilled": "PPP",
+    "Vienna Ambient": "PPP",
+    "Vienna Chilled": "PPP",
+    "Biatorbágy Ambient": "PPP",
+    "Biatorbágy Chilled": "PPP",
 }
 
 GREEN = "#00A651"
