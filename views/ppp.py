@@ -25,6 +25,17 @@ _DEFAULT_R5_RENT = 705       # € per R5 robot per month (current flat rent)
 # Default monthly fee per robot type for the add-robots what-if configurator.
 _ROBOT_FEES = {"R5": 705, "R5 Pro": 744, "R5+ Pro": 913}
 
+# Pro robot variant applicable per site (type, €/robot/month), curated from the
+# SIP proposal. Sites not listed have no confirmed Pro variant.
+_SITE_PRO = {
+    "Schönefeld Ambient": ("R5 Pro", 744),
+    "Schönefeld Chilled": ("R5 Pro", 744),
+    "Vienna Ambient": ("R5+ Pro", 913),
+    "Vienna Chilled": ("R5 Pro", 811),
+    "Biatorbágy Ambient": ("R5+ Pro", 913),
+    "Biatorbágy Chilled": ("R5+ Pro", 913),
+}
+
 # Commercial model per site: "PPP" (pay-per-pick billing), "Per module" (robots ×
 # monthly rent) or "CAPEX" (bought outright). Keyed by parenthesis-free short name.
 _SITE_MODEL = {
@@ -63,6 +74,12 @@ def _env_of(name):
 
 def _site_model(norm):
     return _SITE_MODEL.get(norm, "TBD")
+
+
+def _suitable_robots(norm):
+    """Robot types deployable at a site: R5 plus its confirmed Pro variant."""
+    pro = _SITE_PRO.get(norm)
+    return f"R5, {pro[0]}" if pro else "R5"
 
 
 def _asset_counts(inst_id, date_to):
@@ -231,26 +248,6 @@ def render():
         r5_rent = st.number_input("€ / R5 robot / month", value=_DEFAULT_R5_RENT,
                                   step=5, key="ppp_r5")
 
-    st.markdown("###### Add robots (what-if) — pick types & fill in quantities")
-    add_default = pd.DataFrame({
-        "Robot type": list(_ROBOT_FEES),
-        "Count": [0, 0, 0],
-        "€/robot/month": [r5_rent, _ROBOT_FEES["R5 Pro"], _ROBOT_FEES["R5+ Pro"]],
-    })
-    add_cfg = st.data_editor(
-        add_default, hide_index=True, num_rows="fixed", key="ppp_addcfg",
-        column_config={
-            "Robot type": st.column_config.TextColumn(disabled=True),
-            "Count": st.column_config.NumberColumn(min_value=0, step=1),
-            "€/robot/month": st.column_config.NumberColumn(min_value=0, step=1),
-        },
-    )
-    added_cost = int((add_cfg["Count"] * add_cfg["€/robot/month"]).sum())
-    add_label = ", ".join(
-        f"{int(r['Count'])}× {r['Robot type']}"
-        for _, r in add_cfg.iterrows() if r["Count"] > 0
-    )
-
     inst_id = name_to_id[selected_site]
     short = _short_site(selected_site)
     norm = _norm_site(selected_site)
@@ -265,7 +262,6 @@ def render():
         return
 
     monthly_rent = robots * r5_rent
-    new_rent = monthly_rent + added_cost if added_cost else 0
 
     bp["month"] = bp["date"].dt.strftime("%Y-%m")
     picks_by_month = bp.groupby("month")["picks"].sum().to_dict()
@@ -300,19 +296,42 @@ def render():
                 "Site": _short_site(n),
                 "Environment": _env_of(n),
                 "Commercial model": _site_model(_norm_site(n)),
+                "Suitable robots": _suitable_robots(_norm_site(n)),
             }
             for n in site_names
         ]
     ).sort_values(["Site"]).reset_index(drop=True)
+
+    add_rows = [{"Robot type": "R5", "Count": 0, "€/robot/month": r5_rent}]
+    pro = _SITE_PRO.get(norm)
+    if pro:
+        add_rows.append({"Robot type": pro[0], "Count": 0, "€/robot/month": pro[1]})
+    add_default = pd.DataFrame(add_rows)
 
     with table_area:
         left, right = st.columns(2)
         with left:
             st.markdown(f"##### {short} — OPEX")
             st.dataframe(opex, use_container_width=True, hide_index=True)
+            st.markdown("###### Add robots (what-if) — fill in quantities")
+            add_cfg = st.data_editor(
+                add_default, hide_index=True, num_rows="fixed", key="ppp_addcfg",
+                column_config={
+                    "Robot type": st.column_config.TextColumn(disabled=True),
+                    "Count": st.column_config.NumberColumn(min_value=0, step=1),
+                    "€/robot/month": st.column_config.NumberColumn(min_value=0, step=1),
+                },
+            )
         with right:
             st.markdown("##### Site overview — commercial model")
             st.dataframe(overview, use_container_width=True, hide_index=True)
+
+    added_cost = int((add_cfg["Count"] * add_cfg["€/robot/month"]).sum())
+    add_label = ", ".join(
+        f"{int(r['Count'])}× {r['Robot type']}"
+        for _, r in add_cfg.iterrows() if r["Count"] > 0
+    )
+    new_rent = monthly_rent + added_cost if added_cost else 0
 
     st.divider()
     st.markdown("##### Pay-per-pick vs monthly robot rent")
