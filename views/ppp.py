@@ -100,7 +100,24 @@ def _euro_k(x, _):
     return f"€{x / 1000:.0f}k"
 
 
-def _econ_chart(months, mlab, picks_by_month, cpp, rent, pro_rent, pro_type,
+def _mark_year_boundaries(ax, periods):
+    """Draw a faint divider at each year change and a bold year label below the axis."""
+    years = [str(p)[:4] for p in periods]
+    start = 0
+    for i in range(1, len(years) + 1):
+        if i == len(years) or years[i] != years[start]:
+            if start > 0:
+                ax.axvline(start - 0.5, color="#bbbbbb", lw=1.0, zorder=0)
+            mid = (start + i - 1) / 2
+            ax.annotate(
+                years[start], xy=(mid, 0), xytext=(0, -30),
+                textcoords="offset points", xycoords=("data", "axes fraction"),
+                ha="center", va="top", fontsize=10, fontweight="bold", color="#444",
+            )
+            start = i
+
+
+def _econ_chart(months, picks_by_month, cpp, rent, pro_rent, pro_type,
                 site_name, new_rent=0, add_robots=0):
     y = [picks_by_month.get(m, 0) * cpp for m in months]
     xs = [i for i, v in enumerate(y) if v > 0]
@@ -135,7 +152,8 @@ def _econ_chart(months, mlab, picks_by_month, cpp, rent, pro_rent, pro_type,
     )
     ax.yaxis.set_major_formatter(FuncFormatter(_euro_k))
     ax.set_xticks(range(len(months)))
-    ax.set_xticklabels(mlab, fontsize=9)
+    ax.set_xticklabels([pd.to_datetime(m + "-01").strftime("%b") for m in months], fontsize=9)
+    _mark_year_boundaries(ax, months)
     ax.margins(y=0.18)
     ax.legend(loc="upper left", fontsize=9, framealpha=0.9)
     fig.text(
@@ -158,8 +176,13 @@ def _throughput_chart(ser, granularity, metric_label, site_name):
                  fontsize=13, weight="bold")
     ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x / 1000:.0f}k"))
     step = max(1, len(ser) // 16)
+    if granularity == "Month":
+        labels = [pd.to_datetime(str(i) + "-01").strftime("%b") for i in ser.index]
+    else:
+        labels = [str(i)[5:] for i in ser.index]
     ax.set_xticks(range(0, len(ser), step))
-    ax.set_xticklabels([str(i) for i in ser.index[::step]], fontsize=8, rotation=45, ha="right")
+    ax.set_xticklabels(labels[::step], fontsize=8, rotation=45, ha="right")
+    _mark_year_boundaries(ax, list(ser.index))
     ax.margins(y=0.15)
     fig.tight_layout()
     return fig
@@ -301,8 +324,7 @@ def render():
     st.divider()
     st.markdown("##### Pay-per-pick vs monthly robot rent")
     months = sorted(picks_by_month)
-    mlab = [pd.to_datetime(m + "-01").strftime("%b %y") for m in months]
-    fig_econ = _econ_chart(months, mlab, picks_by_month, cpp, monthly_rent,
+    fig_econ = _econ_chart(months, picks_by_month, cpp, monthly_rent,
                            pro_rent, pro_type, short,
                            new_rent=new_rent if add_robots else 0,
                            add_robots=add_robots)
