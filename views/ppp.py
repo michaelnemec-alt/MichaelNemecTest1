@@ -1,5 +1,4 @@
 import io
-import math
 import re
 from datetime import date, timedelta
 
@@ -23,19 +22,8 @@ from cubeanalytics_utils import (
 _DEFAULT_CPP = 0.09          # € per pick if billed pay-per-pick
 _DEFAULT_R5_RENT = 705       # € per R5 robot per month (current flat rent)
 
-# R5 Pro / R5+ Pro monthly fee per robot and fleet consolidation uplift, curated
-# per site from the earlier proposal. Keyed by the parenthesis-free short name.
-_PRO_FEE = {
-    "Schönefeld Ambient": 744, "Schönefeld Chilled": 744,
-    "Vienna Ambient": 913, "Vienna Chilled": 811,
-    "Biatorbágy Ambient": 913, "Biatorbágy Chilled": 913,
-}
-_PRO_TYPE = {
-    "Schönefeld Ambient": "R5 Pro", "Schönefeld Chilled": "R5 Pro",
-    "Vienna Ambient": "R5+ Pro", "Vienna Chilled": "R5 Pro",
-    "Biatorbágy Ambient": "R5+ Pro", "Biatorbágy Chilled": "R5+ Pro",
-}
-_UPLIFT = {"Ambient": 0.25, "Chilled": 0.40}
+# Default monthly fee per robot type for the add-robots what-if configurator.
+_ROBOT_FEES = {"R5": 705, "R5 Pro": 744, "R5+ Pro": 913}
 
 # Commercial model per site: "PPP" (pay-per-pick billing), "Per module" (robots ×
 # monthly rent) or "CAPEX" (bought outright). Keyed by parenthesis-free short name.
@@ -117,8 +105,8 @@ def _mark_year_boundaries(ax, periods):
             start = i
 
 
-def _econ_chart(months, picks_by_month, cpp, rent, pro_rent, pro_type,
-                site_name, new_rent=0, add_robots=0):
+def _econ_chart(months, picks_by_month, cpp, rent, site_name,
+                new_rent=0, add_label=""):
     y = [picks_by_month.get(m, 0) * cpp for m in months]
     xs = [i for i, v in enumerate(y) if v > 0]
     ys = [y[i] for i in xs]
@@ -136,18 +124,15 @@ def _econ_chart(months, picks_by_month, cpp, rent, pro_rent, pro_type,
                     color=GREEN, alpha=0.12, interpolate=True)
     ax.fill_between(xs, ys, rent, where=[v < rent for v in ys],
                     color=RED, alpha=0.12, interpolate=True)
-    if pro_rent:
-        ax.axhline(pro_rent, color=BLUE, ls=":", lw=1.9,
-                   label=f"{pro_type} rent €{pro_rent:,.0f}")
     if new_rent:
         ax.axhline(new_rent, color="#E67E22", ls="-.", lw=1.9,
-                   label=f"R5 rent +{add_robots} robots €{new_rent:,.0f}")
+                   label=f"With added robots €{new_rent:,.0f} ({add_label})")
 
     avg = sum(ys) / len(ys) if ys else 0
-    ptxt = f"{pro_type} €{pro_rent / 1000:.0f}k" if pro_rent else "Pro TBD"
+    ntxt = f" · +robots €{new_rent / 1000:.0f}k" if new_rent else ""
     ax.set_title(
-        f"Pay-per-pick spend vs R5 rent vs R5 Pro rent — {site_name}\n"
-        f"R5 €{rent / 1000:.0f}k · {ptxt} · PPP €{avg / 1000:.0f}k",
+        f"Pay-per-pick spend vs R5 rent — {site_name}\n"
+        f"R5 €{rent / 1000:.0f}k · PPP €{avg / 1000:.0f}k{ntxt}",
         fontsize=13, weight="bold",
     )
     ax.yaxis.set_major_formatter(FuncFormatter(_euro_k))
@@ -234,7 +219,7 @@ def render():
 
     today = date.today()
     default_from = (today.replace(day=1) - timedelta(days=365)).replace(day=1)
-    d1, d2, d3, d4, d5 = st.columns(5)
+    d1, d2, d3, d4 = st.columns(4)
     with d1:
         date_from = st.date_input("From", value=default_from, key="ppp_from")
     with d2:
@@ -245,15 +230,30 @@ def render():
     with d4:
         r5_rent = st.number_input("€ / R5 robot / month", value=_DEFAULT_R5_RENT,
                                   step=5, key="ppp_r5")
-    with d5:
-        add_robots = st.number_input("Add robots", value=0, min_value=0, step=1,
-                                     key="ppp_add",
-                                     help="Extra robots added to the flat-rent line in the chart.")
+
+    st.markdown("###### Add robots (what-if) — pick types & fill in quantities")
+    add_default = pd.DataFrame({
+        "Robot type": list(_ROBOT_FEES),
+        "Count": [0, 0, 0],
+        "€/robot/month": [r5_rent, _ROBOT_FEES["R5 Pro"], _ROBOT_FEES["R5+ Pro"]],
+    })
+    add_cfg = st.data_editor(
+        add_default, hide_index=True, num_rows="fixed", key="ppp_addcfg",
+        column_config={
+            "Robot type": st.column_config.TextColumn(disabled=True),
+            "Count": st.column_config.NumberColumn(min_value=0, step=1),
+            "€/robot/month": st.column_config.NumberColumn(min_value=0, step=1),
+        },
+    )
+    added_cost = int((add_cfg["Count"] * add_cfg["€/robot/month"]).sum())
+    add_label = ", ".join(
+        f"{int(r['Count'])}× {r['Robot type']}"
+        for _, r in add_cfg.iterrows() if r["Count"] > 0
+    )
 
     inst_id = name_to_id[selected_site]
     short = _short_site(selected_site)
     norm = _norm_site(selected_site)
-    env = _env_of(selected_site)
 
     with st.spinner("Loading asset counts..."):
         robots, ports = _asset_counts(inst_id, date_to)
@@ -265,14 +265,7 @@ def render():
         return
 
     monthly_rent = robots * r5_rent
-    new_rent = (robots + add_robots) * r5_rent
-
-    pro_fee = _PRO_FEE.get(norm, 0)
-    pro_type = _PRO_TYPE.get(norm, "Pro")
-    pro_rent = 0
-    if pro_fee and robots:
-        uplift = _UPLIFT.get(env, 0.25)
-        pro_rent = math.ceil(robots / (1 + uplift)) * pro_fee
+    new_rent = monthly_rent + added_cost if added_cost else 0
 
     bp["month"] = bp["date"].dt.strftime("%Y-%m")
     picks_by_month = bp.groupby("month")["picks"].sum().to_dict()
@@ -324,10 +317,8 @@ def render():
     st.divider()
     st.markdown("##### Pay-per-pick vs monthly robot rent")
     months = sorted(picks_by_month)
-    fig_econ = _econ_chart(months, picks_by_month, cpp, monthly_rent,
-                           pro_rent, pro_type, short,
-                           new_rent=new_rent if add_robots else 0,
-                           add_robots=add_robots)
+    fig_econ = _econ_chart(months, picks_by_month, cpp, monthly_rent, short,
+                           new_rent=new_rent, add_label=add_label)
     st.pyplot(fig_econ)
     plt.close(fig_econ)
 
