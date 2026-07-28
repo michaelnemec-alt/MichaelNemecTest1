@@ -243,11 +243,12 @@ def _bin_presentations_hourly(df_wait, target_date):
     return out
 
 
-def _maxcap_hourly(df_wait_window):
+def _maxcap_hourly(df_wait_window, quantile=0.95):
     """Per-hour peak of daily total bin presentations over the supplied window.
 
-    For each hour-of-day, take the maximum across all days of that day's total
-    bin presentations in that hour — the peak throughput envelope.
+    For each hour-of-day, take the 95th percentile across all days of that day's
+    total bin presentations in that hour — the peak throughput envelope, robust
+    to single-day outliers.
     """
     out = [0.0] * 24
     if df_wait_window is None or df_wait_window.empty:
@@ -256,9 +257,9 @@ def _maxcap_hourly(df_wait_window):
     d["_d"] = d["Timestamp"].dt.date
     d["_h"] = d["Timestamp"].dt.hour
     daily = d.groupby(["_d", "_h"])["Count"].sum().reset_index()
-    mx = daily.groupby("_h")["Count"].max()
+    q = daily.groupby("_h")["Count"].quantile(quantile)
     for h in range(24):
-        out[h] = float(mx.get(h, 0))
+        out[h] = float(q.get(h, 0))
     return out
 
 
@@ -395,7 +396,7 @@ def _overlay_capacity(ax, df_wait, base_date, target_date, total_bins=None, maxc
     ax_bins.spines["right"].set_position(("axes", 1.11))
     if maxcap is not None and any(maxcap):
         ax_bins.plot(x_num, maxcap, color="#d0342c", linewidth=1.8,
-                     label="Max bin presentations / hour (last 2 months)")
+                     label="Peak bin presentations / hour (95th pct, last 2 months)")
     if total_bins is not None and any(total_bins):
         ax_bins.plot(x_num, total_bins, color="#9aa0a6", linewidth=1.8,
                      label="Bin presentations / hour (total)")
