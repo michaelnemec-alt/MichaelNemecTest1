@@ -48,7 +48,8 @@ st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-
 PAGES = ["Home", "Reporting & Data Tools *", "System OEE *", "Test"]
 OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Performance KPI", "Facility KPI *"]
 REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
-SYSTEM_KPI_VIEWS = ["Availability KPI", "System", "Ports *", "Robots", "Chargers", "AutoStore system *", "Error & Health Metrics"]
+SYSTEM_KPI_VIEWS = ["Availability KPI", "System *", "Ports *", "Robots", "Chargers", "AutoStore system *", "Error & Health Metrics"]
+SYSTEM_VIEWS = ["Overview", "System mode periods"]
 PORTS_VIEWS = ["Overview", "Detailed Overview"]
 FACILITY_VIEWS = ["Time to Recover", "Reliability", "Incidents"]
 AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
@@ -70,6 +71,7 @@ system_view = None
 facility_view = None
 autostore_view = None
 ports_view = None
+system_sub_view = None
 
 if selected == "Reporting & Data Tools *":
     reporting_view = st.segmented_control(
@@ -105,6 +107,14 @@ if selected == "System OEE *":
                 key="autostore_nav_selection",
                 label_visibility="collapsed",
             ) or "Versions of Systems"
+        elif system_view == "System *":
+            system_sub_view = st.segmented_control(
+                "system_sub_nav",
+                options=SYSTEM_VIEWS,
+                default="Overview",
+                key="system_sub_nav_selection",
+                label_visibility="collapsed",
+            ) or "Overview"
         elif system_view == "Ports *":
             ports_view = st.segmented_control(
                 "ports_nav",
@@ -190,6 +200,11 @@ elif selected == "System OEE *":
             from views.cube_analytics import render_autostore
             logger.info("Rendering AutoStore system view: %s", autostore_view or "Versions of Systems")
             render_autostore(autostore_view or "Versions of Systems")
+        elif system_view == "System *":
+            from views.cube_analytics import render
+            view = "System" if (system_sub_view or "Overview") == "Overview" else "System mode periods"
+            logger.info("Rendering System sub-view: %s", view)
+            render(view)
         elif system_view == "Ports *":
             from views.cube_analytics import render
             view = "Ports" if (ports_view or "Overview") == "Overview" else "Port Detailed Overview"

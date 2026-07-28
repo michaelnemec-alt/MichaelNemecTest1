@@ -152,6 +152,57 @@ def query_uptime(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=86400, persist="disk")
+def query_system_mode_periods(installation_id, date_from_str, date_to_str):
+    """Uptime/downtime periods (system mode periods) read from the uptime endpoint.
+
+    Returns one row per period with the same columns the CubeAnalytics portal
+    shows in "System mode periods". Times are recorded within the same calendar
+    day, so a stop that persists overnight appears twice (once per day).
+
+    Columns: date, mode ('Up'|'Down'), start_at, end_at, module, module_error,
+             stop_code, up_seconds, down_seconds.
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/uptime/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        day = day_result.get("date")
+        for p in day_result.get("result", {}).get("periods", []):
+            is_up = p.get("mode") == "uptime"
+            robot_id = p.get("stop_robot_id")
+            err_code = p.get("stop_error_code")
+            err_name = p.get("stop_error_name")
+            module_error = (
+                f"{err_code} {err_name}".strip()
+                if (err_code is not None or err_name) else ""
+            )
+            rows.append({
+                "date": day,
+                "mode": "Up" if is_up else "Down",
+                "start_at": p.get("start_at"),
+                "end_at": p.get("end_at"),
+                "module": f"Robot {robot_id}" if robot_id is not None else "",
+                "module_error": module_error,
+                "stop_code": p.get("stop_code_name") or "",
+                "up_seconds": p.get("up_seconds", 0) or 0,
+                "down_seconds": p.get("down_seconds", 0) or 0,
+            })
+
+    if not rows:
+        return pd.DataFrame(
+            columns=["date", "mode", "start_at", "end_at", "module",
+                     "module_error", "stop_code", "up_seconds", "down_seconds"]
+        )
+    df = pd.DataFrame(rows)
+    df["start_at"] = pd.to_datetime(df["start_at"], errors="coerce")
+    df["end_at"] = pd.to_datetime(df["end_at"], errors="coerce")
+    df = df.sort_values("start_at").reset_index(drop=True)
+    return df
+
+
+@st.cache_data(ttl=86400, persist="disk")
 def query_robot_state(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/robot-state/"
     params = {"after": date_from_str, "before": date_to_str}

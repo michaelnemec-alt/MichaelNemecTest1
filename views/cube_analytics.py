@@ -14,7 +14,8 @@ logger = logging.getLogger("cube_analytics")
 
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
-    query_system_health, query_uptime, query_robot_state, query_bin_presentations,
+    query_system_health, query_uptime, query_system_mode_periods,
+    query_robot_state, query_bin_presentations,
     query_port_wait_time_daily, query_port_uptime, query_port_uptime_per_port,
     query_incidents, query_robot_errors,
     query_recovery_times, query_installation_data, query_module_versions, query_bins_above,
@@ -338,6 +339,8 @@ def render(selected_view="Overview & Health"):
             _view_module_chargers(date_from_str, date_to_str, aggregation)
         elif selected_view == "System":
             _view_module_system(date_from_str, date_to_str, aggregation)
+        elif selected_view == "System mode periods":
+            _view_system_mode_periods(date_from_str, date_to_str, aggregation)
         elif selected_view == "Time to Recover":
             _view_facility_time_to_recover(date_from_str, date_to_str, aggregation)
         elif selected_view == "Reliability":
@@ -1563,6 +1566,102 @@ def _view_port_detail(date_from_str, date_to_str, aggregation):
         "Download per-port data", data=csv_bytes,
         file_name=f"port_detail_{_short_site(selected_site)}_{date_from_str}_{date_to_str}.csv",
         mime="text/csv", key="dl_port_detail",
+    )
+
+
+def _fmt_hms(seconds):
+    """Format a duration in seconds as e.g. '15h 52m 8s' / '54m 35s' / '3m 33s'."""
+    s = int(round(seconds or 0))
+    if s <= 0:
+        return ""
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    parts = []
+    if h:
+        parts.append(f"{h}h")
+    if h or m:
+        parts.append(f"{m}m")
+    parts.append(f"{sec}s")
+    return " ".join(parts)
+
+
+def _view_system_mode_periods(date_from_str, date_to_str, aggregation):
+    st.markdown("#### System mode periods")
+    st.caption(
+        "Overview of all uptime and downtime periods within the selected time "
+        "span. Please note that all times are recorded within the same calendar "
+        "day. Errors that persist overnight will therefore appear twice — once "
+        "on the date they began, and again on the following day."
+    )
+
+    try:
+        installations = get_installations()
+    except Exception as e:
+        st.error(f"Failed to fetch installations: {e}")
+        return
+    site_names = sorted(inst["name"] for inst in installations)
+    if not site_names:
+        st.warning("No sites available.")
+        return
+
+    name_to_id = {inst["name"]: inst["id"] for inst in installations}
+    selected_site = st.selectbox(
+        "Site", site_names, index=0, key="system_mode_site",
+        format_func=_short_site,
+    )
+    inst_id = name_to_id[selected_site]
+
+    with st.spinner("Loading system mode periods..."):
+        df = query_system_mode_periods(inst_id, date_from_str, date_to_str)
+    if df.empty:
+        st.warning("No system mode periods returned for this site and period.")
+        return
+
+    df = df.sort_values("start_at", ascending=False).reset_index(drop=True)
+
+    up_count = int((df["mode"] == "Up").sum())
+    down_count = int((df["mode"] == "Down").sum())
+    up_total = _fmt_hms(df.loc[df["mode"] == "Up", "up_seconds"].sum())
+    down_total = _fmt_hms(df.loc[df["mode"] == "Down", "down_seconds"].sum())
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Up periods", up_count)
+    c2.metric("Down periods", down_count)
+    c3.metric("Total uptime", up_total or "0s")
+    c4.metric("Total downtime", down_total or "0s")
+
+    def _duration(row):
+        a, b = row["start_at"], row["end_at"]
+        if pd.isna(a) or pd.isna(b):
+            return ""
+        return f"{a.strftime('%H:%M')} - {b.strftime('%H:%M')}"
+
+    show = pd.DataFrame({
+        "Mode": df["mode"].map({"Up": "▲ Up", "Down": "▼ Down"}),
+        "Date": df["start_at"].dt.strftime("%Y-%m-%d"),
+        "Duration": df.apply(_duration, axis=1),
+        "Module": df["module"],
+        "Module error": df["module_error"],
+        "Stop code": df["stop_code"],
+        "Uptime": df["up_seconds"].apply(_fmt_hms),
+        "Downtime": df["down_seconds"].apply(_fmt_hms),
+    })
+
+    def _mode_style(col):
+        return [
+            "color:#1a7f37;font-weight:600" if v == "▲ Up"
+            else "color:#c0392b;font-weight:600"
+            for v in col
+        ]
+
+    styled = show.style.apply(_mode_style, subset=["Mode"])
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    st.divider()
+    csv_bytes = show.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download system mode periods", data=csv_bytes,
+        file_name=f"system_mode_periods_{_short_site(selected_site)}_{date_from_str}_{date_to_str}.csv",
+        mime="text/csv", key="dl_system_mode",
     )
 
 
