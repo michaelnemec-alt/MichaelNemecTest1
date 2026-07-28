@@ -147,16 +147,21 @@ _CAPACITY_TARGET_SEC = 7.0
 # Cap the wait-time (left) axis so outlier hours don't flatten the chart.
 _CAPACITY_MAX_SEC = 10.0
 
-# Best-effort default: map a picking-export warehouse code (e.g. "hu.bud2") to a
-# CubeAnalytics site (city). The user can always override via the site selector.
+# Map a picking-export warehouse code (e.g. "hu.bud2") to a CubeAnalytics site
+# (city). Keys are matched against the warehouse code as substrings, so they must
+# be specific enough not to collide (e.g. "prg2" vs "prg3"). Warehouses without a
+# CubeAnalytics installation (PRG3/Chrášťany, FRA/Bischofsheim) map to a city that
+# is not returned by the API, so no capacity data is shown for them.
 _WAREHOUSE_CITY_HINTS = {
+    "prg2": "Praha",
+    "prg3": "Chrášťany",
     "bud": "Biatorbágy",
-    "prg": "Praha",
     "vie": "Vienna",
     "muc": "Garching",
     "gar": "Garching",
     "ber": "Schönefeld",
     "sch": "Schönefeld",
+    "fra": "Bischofsheim",
 }
 
 
@@ -178,12 +183,17 @@ def _installation_site_map():
 
 
 def _default_capacity_site(sites, warehouse):
-    """Pick a sensible default site for the capacity overlay from the warehouse code."""
+    """Resolve the CubeAnalytics site for a warehouse code.
+
+    Returns the mapped city only if it has a CubeAnalytics installation. Returns
+    None when the warehouse has no API site (e.g. PRG3/Chrášťany, FRA/Bischofsheim)
+    or is unknown, so the caller can skip the capacity overlay instead of guessing.
+    """
     wh = (warehouse or "").lower()
     for hint, city in _WAREHOUSE_CITY_HINTS.items():
-        if hint in wh and city in sites:
-            return city
-    return next(iter(sites), None)
+        if hint in wh:
+            return city if city in sites else None
+    return None
 
 
 def _capacity_hourly(df_wait, target_date):
@@ -537,13 +547,21 @@ def render():
             st.info("CubeAnalytics API not configured — hourly capacity chart unavailable.")
         else:
             cap_site_map = _installation_site_map()
-            if cap_site_map:
+            default_site = _default_capacity_site(cap_site_map, warehouse)
+            if not cap_site_map:
+                pass
+            elif default_site is None:
+                st.info(
+                    f"CubeAnalytics nemá instalaci pro sklad **{warehouse}** "
+                    "(např. PRG3/Chrášťany, FRA/Bischofsheim) — hodinová capacity "
+                    "data (bin presentations, peak) se nevykreslí."
+                )
+            else:
                 site_options = sorted(cap_site_map.keys())
-                default_site = _default_capacity_site(cap_site_map, warehouse)
                 cap_site = st.selectbox(
                     "CubeAnalytics site for capacity chart",
                     options=site_options,
-                    index=site_options.index(default_site) if default_site in site_options else 0,
+                    index=site_options.index(default_site),
                     key="prio_cap_site",
                     help="Which CubeAnalytics installation the hourly Bin/User time "
                          "and bins-picked-per-hour data is read from.",
