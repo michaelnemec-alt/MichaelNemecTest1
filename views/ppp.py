@@ -235,11 +235,17 @@ def render():
 
     monthly_rent = robots * r5_rent
 
-    pro_fee = st.number_input(
-        f"R5 Pro fee (€/robot/month) — {norm}",
-        value=int(_PRO_FEE.get(norm, 0)), step=1, key="ppp_pro_fee",
-        help="Monthly fee per consolidated Pro robot. 0 = unknown (Pro line hidden).",
+    add_str = st.text_input(
+        "Add robots (scenario) — comma-separated counts",
+        value="10, 20, 23, 26, 27", key="ppp_add",
+        help="Extra monthly rent and new fleet size if you add these robots (× R5 rent).",
     )
+    adds = []
+    for tok in re.split(r"[,;\s]+", add_str.strip()):
+        if tok.isdigit():
+            adds.append(int(tok))
+
+    pro_fee = _PRO_FEE.get(norm, 0)
     pro_type = _PRO_TYPE.get(norm, "Pro")
     pro_rent = 0
     if pro_fee and robots:
@@ -252,11 +258,10 @@ def render():
     ppp_month = avg_month_picks * cpp
 
     st.divider()
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1, m2, m3, m5, m6 = st.columns(5)
     m1.metric("Robots", f"{robots:,}")
     m2.metric("Ports", f"{ports:,}")
     m3.metric("R5 flat rent / month", f"€{monthly_rent:,.0f}")
-    m4.metric("R5 Pro rent / month", f"€{pro_rent:,.0f}" if pro_rent else "TBD")
     m5.metric("Avg picks / month", f"{avg_month_picks:,.0f}")
     m6.metric("PPP @ €/pick / month", f"€{ppp_month:,.0f}")
 
@@ -264,16 +269,26 @@ def render():
         {
             "Metric": [
                 "Commercial model", "Robots", "Ports", "R5 rent / robot / month",
-                "R5 flat rent / month (robots × rent)", "R5 Pro rent / month",
+                "R5 flat rent / month (robots × rent)",
                 "Avg picks / month", f"PPP @ €{cpp:.2f}/pick / month",
             ],
             "Value": [
                 _site_model(norm), f"{robots:,}", f"{ports:,}", f"€{r5_rent:,.0f}",
                 f"€{monthly_rent:,.0f}",
-                f"€{pro_rent:,.0f}" if pro_rent else "TBD",
                 f"{avg_month_picks:,.0f}", f"€{ppp_month:,.0f}",
             ],
         }
+    )
+    add_scenario = pd.DataFrame(
+        [
+            {
+                "Added robots": n,
+                "New fleet": robots + n,
+                "New R5 flat rent / month": f"€{(robots + n) * r5_rent:,.0f}",
+                "Extra € / month": f"€{n * r5_rent:,.0f}",
+            }
+            for n in adds
+        ]
     )
     overview = pd.DataFrame(
         [
@@ -294,6 +309,10 @@ def render():
         with right:
             st.markdown("##### Site overview — commercial model")
             st.dataframe(overview, use_container_width=True, hide_index=True)
+
+    if not add_scenario.empty:
+        st.markdown("##### Add-robots cost scenario")
+        st.dataframe(add_scenario, use_container_width=True, hide_index=True)
 
     st.divider()
     st.markdown("##### Pay-per-pick vs monthly robot rent")
@@ -333,6 +352,8 @@ def render():
         out.to_excel(writer, index=False, sheet_name="PPP")
         opex.to_excel(writer, index=False, sheet_name="OPEX")
         overview.to_excel(writer, index=False, sheet_name="Site overview")
+        if not add_scenario.empty:
+            add_scenario.to_excel(writer, index=False, sheet_name="Add robots")
     st.download_button(
         "Download PPP data (XLSX)", data=buf.getvalue(),
         file_name=f"ppp_{norm.replace(' ', '_')}_{granularity.lower()}_{date_from}_{date_to}.xlsx",
