@@ -335,8 +335,8 @@ def _load_wait_df(autostore_num, site_map, selected_site, target_date):
             return None
 
 
-def _load_maxcap_df(autostore_num, site_map, selected_site, target_date, months=4):
-    """Fetch ~4 months of port-wait data to build the peak bin-presentations envelope."""
+def _load_maxcap_df(autostore_num, site_map, selected_site, target_date, months=2):
+    """Fetch ~2 months of port-wait data to build the peak bin-presentations envelope."""
     env = _AS_ENV.get(autostore_num)
     inst_id = site_map.get(selected_site, {}).get(env)
     if not inst_id:
@@ -395,7 +395,7 @@ def _overlay_capacity(ax, df_wait, base_date, target_date, total_bins=None, maxc
     ax_bins.spines["right"].set_position(("axes", 1.11))
     if maxcap is not None and any(maxcap):
         ax_bins.plot(x_num, maxcap, color="#d0342c", linewidth=1.8,
-                     label="Max bin presentations / hour (last 4 months)")
+                     label="Max bin presentations / hour (last 2 months)")
     if total_bins is not None and any(total_bins):
         ax_bins.plot(x_num, total_bins, color="#9aa0a6", linewidth=1.8,
                      label="Bin presentations / hour (total)")
