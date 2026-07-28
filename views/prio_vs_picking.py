@@ -225,6 +225,43 @@ def _capacity_hourly(df_wait, target_date):
     return hours, bin_time, user_time, bins
 
 
+def _bin_presentations_hourly(df_wait, target_date):
+    """Total bin presentations per hour (all pick types + categories) for one day.
+
+    This is the full flow through the AutoStore (not just picked cat 1+2), i.e.
+    sum of Count across every port/pick_type/category per hour.
+    """
+    out = [0.0] * 24
+    if df_wait is None or df_wait.empty:
+        return out
+    d = df_wait[df_wait["Timestamp"].dt.date == target_date]
+    if d.empty:
+        return out
+    g = d.groupby(d["Timestamp"].dt.hour)["Count"].sum()
+    for h in range(24):
+        out[h] = float(g.get(h, 0))
+    return out
+
+
+def _maxcap_hourly(df_wait_window):
+    """Per-hour peak of daily total bin presentations over the supplied window.
+
+    For each hour-of-day, take the maximum across all days of that day's total
+    bin presentations in that hour — the peak throughput envelope.
+    """
+    out = [0.0] * 24
+    if df_wait_window is None or df_wait_window.empty:
+        return out
+    d = df_wait_window.copy()
+    d["_d"] = d["Timestamp"].dt.date
+    d["_h"] = d["Timestamp"].dt.hour
+    daily = d.groupby(["_d", "_h"])["Count"].sum().reset_index()
+    mx = daily.groupby("_h")["Count"].max()
+    for h in range(24):
+        out[h] = float(mx.get(h, 0))
+    return out
+
+
 def _capacity_chart(df_wait, autostore_num, warehouse_name, target_date, site_name, ax=None):
     """Combo chart mirroring 'AS Max capacity utilization':
 
@@ -298,11 +335,30 @@ def _load_wait_df(autostore_num, site_map, selected_site, target_date):
             return None
 
 
-def _overlay_capacity(ax, df_wait, base_date, target_date):
+def _load_maxcap_df(autostore_num, site_map, selected_site, target_date, months=4):
+    """Fetch ~4 months of port-wait data to build the peak bin-presentations envelope."""
+    env = _AS_ENV.get(autostore_num)
+    inst_id = site_map.get(selected_site, {}).get(env)
+    if not inst_id:
+        return None
+    start = target_date - timedelta(days=30 * months)
+    with st.spinner(f"Loading {months}-month peak capacity (AS{autostore_num} / {env})..."):
+        try:
+            return query_port_wait_time(
+                inst_id, str(start), str(target_date + timedelta(days=1))
+            )
+        except Exception as e:
+            st.warning(f"Peak-capacity query failed: {e}")
+            return None
+
+
+def _overlay_capacity(ax, df_wait, base_date, target_date, total_bins=None, maxcap=None):
     """Overlay hourly capacity data onto the scatter axes on their own y-axes.
 
     Bin wait / operator handling times (bars, seconds) sit behind the scatter on
     a right-hand seconds axis; bins picked/hour is a line on a further-right axis.
+    The same bins axis also carries the grey total bin-presentations/hour line and
+    the red 4-month peak envelope.
     """
     hours, bin_time, user_time, bins = _capacity_hourly(df_wait, target_date)
     x_num = mdates.date2num([base_date + pd.Timedelta(hours=h) for h in hours])
@@ -329,9 +385,20 @@ def _overlay_capacity(ax, df_wait, base_date, target_date):
     ax_sec.set_ylim(*_aligned_ylim(_CAPACITY_MAX_SEC))
     ax_sec.set_ylabel("Time (seconds)", fontsize=13)
 
-    bins_top = max(bins) * 1.05 if any(bins) else 1.0
+    peak = list(bins)
+    if total_bins is not None:
+        peak += list(total_bins)
+    if maxcap is not None:
+        peak += list(maxcap)
+    bins_top = max(peak) * 1.05 if any(peak) else 1.0
     ax_bins = ax.twinx()
     ax_bins.spines["right"].set_position(("axes", 1.11))
+    if maxcap is not None and any(maxcap):
+        ax_bins.plot(x_num, maxcap, color="#d0342c", linewidth=1.8,
+                     label="Max bin presentations / hour (last 4 months)")
+    if total_bins is not None and any(total_bins):
+        ax_bins.plot(x_num, total_bins, color="#9aa0a6", linewidth=1.8,
+                     label="Bin presentations / hour (total)")
     ax_bins.plot(x_num, bins, color="#111111", linewidth=2, marker="o",
                  markersize=3.5, label="Bins picked / hour (cat 1+2)")
     ax_bins.set_ylim(*_aligned_ylim(bins_top))
@@ -343,14 +410,17 @@ def _overlay_capacity(ax, df_wait, base_date, target_date):
 
 
 def _combined_chart(scatter_data, df_wait, autostore_num, warehouse, full_data,
-                    target_date, plan_planned, site_name):
+                    target_date, plan_planned, site_name, df_wait_window=None):
     """Prio-vs-Picking scatter with hourly capacity data overlaid in one chart."""
     fig, ax = plt.subplots(figsize=(26, 11), dpi=150)
     fig.patch.set_facecolor("white")
     _generate_chart(scatter_data, autostore_num, warehouse, full_data=full_data,
                     target_date=target_date, plan_planned=plan_planned, ax=ax)
     base_date = scatter_data["Finished Picking At"].dt.normalize().iloc[0]
-    _overlay_capacity(ax, df_wait, base_date, target_date)
+    total_bins = _bin_presentations_hourly(df_wait, target_date)
+    maxcap = _maxcap_hourly(df_wait_window) if df_wait_window is not None else None
+    _overlay_capacity(ax, df_wait, base_date, target_date,
+                      total_bins=total_bins, maxcap=maxcap)
     ax.set_title(
         f"Prio vs Picking + capacity — AutoStore {autostore_num} "
         f"({_AS_ENV.get(autostore_num, '')})\n{site_name} | {target_date}",
@@ -518,8 +588,10 @@ def render():
 
         df_wait_91 = _load_wait_df(91, cap_site_map, cap_site, target_date) if (show_capacity and cap_site) else None
         if df_wait_91 is not None:
+            df_win_91 = _load_maxcap_df(91, cap_site_map, cap_site, target_date)
             fig_91 = _combined_chart(df_91_scatter, df_wait_91, 91, warehouse,
-                                     df_91, target_date, plan_planned, cap_site)
+                                     df_91, target_date, plan_planned, cap_site,
+                                     df_wait_window=df_win_91)
         else:
             fig_91 = _generate_chart(df_91_scatter, 91, warehouse,
                                      full_data=df_91, target_date=target_date, plan_planned=plan_planned)
@@ -544,8 +616,10 @@ def render():
 
         df_wait_92 = _load_wait_df(92, cap_site_map, cap_site, target_date) if (show_capacity and cap_site) else None
         if df_wait_92 is not None:
+            df_win_92 = _load_maxcap_df(92, cap_site_map, cap_site, target_date)
             fig_92 = _combined_chart(df_92_scatter, df_wait_92, 92, warehouse,
-                                     df_92, target_date, plan_planned, cap_site)
+                                     df_92, target_date, plan_planned, cap_site,
+                                     df_wait_window=df_win_92)
         else:
             fig_92 = _generate_chart(df_92_scatter, 92, warehouse,
                                      full_data=df_92, target_date=target_date, plan_planned=plan_planned)
