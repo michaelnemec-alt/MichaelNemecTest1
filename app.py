@@ -47,7 +47,7 @@ st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-
 
 PAGES = ["Home", "Reporting & Data Tools *", "System OEE *", "Test"]
 OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Performance KPI", "Facility KPI *"]
-REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance"]
+REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance", "PPP"]
 SYSTEM_KPI_VIEWS = ["Availability KPI", "System *", "Ports *", "Robots", "Chargers", "AutoStore system *", "Error & Health Metrics"]
 SYSTEM_VIEWS = ["Overview", "System mode periods"]
 PORTS_VIEWS = ["Overview", "Detailed Overview"]
@@ -167,7 +167,8 @@ if selected == "Home":
             <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>Prio vs Picking</b><br><span style="color:#6b7280; font-size:0.85em;">Scatter plot of picking timeliness vs prioritization time</span></div>
             <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>UNIFY Pivot Ready</b><br><span style="color:#6b7280; font-size:0.85em;">Convert CubeAnalytics CSV to pivot-ready format</span></div>
             <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>Day Evaluation</b><br><span style="color:#6b7280; font-size:0.85em;">Shift decision support — plan vs actual, buffer assessment</span></div>
-            <div style="padding:8px 0;"><b>Performance</b><br><span style="color:#6b7280; font-size:0.85em;">Wait/waste time & throughput, weekday comparison</span></div>
+            <div style="padding:8px 0; border-bottom:1px solid #f5f5f5;"><b>Performance</b><br><span style="color:#6b7280; font-size:0.85em;">Wait/waste time & throughput, weekday comparison</span></div>
+            <div style="padding:8px 0;"><b>PPP</b><br><span style="color:#6b7280; font-size:0.85em;">Pay-per-pick spend vs monthly R5 / R5 Pro robot rent</span></div>
         </div>""", unsafe_allow_html=True)
     with c2:
         st.markdown("""<div class="section-card">
@@ -190,6 +191,9 @@ elif selected == "Reporting & Data Tools *":
     elif reporting_view == "Performance":
         from views.cube_analytics import render
         render("Performance")
+    elif reporting_view == "PPP":
+        from views.ppp import render
+        render()
 
 elif selected == "System OEE *":
     if oee_view == "OEE Overview":
