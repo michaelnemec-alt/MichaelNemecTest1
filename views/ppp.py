@@ -100,7 +100,8 @@ def _euro_k(x, _):
     return f"€{x / 1000:.0f}k"
 
 
-def _econ_chart(months, mlab, picks_by_month, cpp, rent, pro_rent, pro_type, site_name):
+def _econ_chart(months, mlab, picks_by_month, cpp, rent, pro_rent, pro_type,
+                site_name, new_rent=0, add_robots=0):
     y = [picks_by_month.get(m, 0) * cpp for m in months]
     xs = [i for i, v in enumerate(y) if v > 0]
     ys = [y[i] for i in xs]
@@ -121,6 +122,9 @@ def _econ_chart(months, mlab, picks_by_month, cpp, rent, pro_rent, pro_type, sit
     if pro_rent:
         ax.axhline(pro_rent, color=BLUE, ls=":", lw=1.9,
                    label=f"{pro_type} rent €{pro_rent:,.0f}")
+    if new_rent:
+        ax.axhline(new_rent, color="#E67E22", ls="-.", lw=1.9,
+                   label=f"R5 rent +{add_robots} robots €{new_rent:,.0f}")
 
     avg = sum(ys) / len(ys) if ys else 0
     ptxt = f"{pro_type} €{pro_rent / 1000:.0f}k" if pro_rent else "Pro TBD"
@@ -207,7 +211,7 @@ def render():
 
     today = date.today()
     default_from = (today.replace(day=1) - timedelta(days=365)).replace(day=1)
-    d1, d2, d3, d4 = st.columns(4)
+    d1, d2, d3, d4, d5 = st.columns(5)
     with d1:
         date_from = st.date_input("From", value=default_from, key="ppp_from")
     with d2:
@@ -218,6 +222,10 @@ def render():
     with d4:
         r5_rent = st.number_input("€ / R5 robot / month", value=_DEFAULT_R5_RENT,
                                   step=5, key="ppp_r5")
+    with d5:
+        add_robots = st.number_input("Add robots", value=0, min_value=0, step=1,
+                                     key="ppp_add",
+                                     help="Extra robots added to the flat-rent line in the chart.")
 
     inst_id = name_to_id[selected_site]
     short = _short_site(selected_site)
@@ -234,16 +242,7 @@ def render():
         return
 
     monthly_rent = robots * r5_rent
-
-    add_str = st.text_input(
-        "Add robots (scenario) — comma-separated counts",
-        value="10, 20, 23, 26, 27", key="ppp_add",
-        help="Extra monthly rent and new fleet size if you add these robots (× R5 rent).",
-    )
-    adds = []
-    for tok in re.split(r"[,;\s]+", add_str.strip()):
-        if tok.isdigit():
-            adds.append(int(tok))
+    new_rent = (robots + add_robots) * r5_rent
 
     pro_fee = _PRO_FEE.get(norm, 0)
     pro_type = _PRO_TYPE.get(norm, "Pro")
@@ -279,17 +278,6 @@ def render():
             ],
         }
     )
-    add_scenario = pd.DataFrame(
-        [
-            {
-                "Added robots": n,
-                "New fleet": robots + n,
-                "New R5 flat rent / month": f"€{(robots + n) * r5_rent:,.0f}",
-                "Extra € / month": f"€{n * r5_rent:,.0f}",
-            }
-            for n in adds
-        ]
-    )
     overview = pd.DataFrame(
         [
             {
@@ -310,16 +298,14 @@ def render():
             st.markdown("##### Site overview — commercial model")
             st.dataframe(overview, use_container_width=True, hide_index=True)
 
-    if not add_scenario.empty:
-        st.markdown("##### Add-robots cost scenario")
-        st.dataframe(add_scenario, use_container_width=True, hide_index=True)
-
     st.divider()
     st.markdown("##### Pay-per-pick vs monthly robot rent")
     months = sorted(picks_by_month)
     mlab = [pd.to_datetime(m + "-01").strftime("%b %y") for m in months]
     fig_econ = _econ_chart(months, mlab, picks_by_month, cpp, monthly_rent,
-                           pro_rent, pro_type, short)
+                           pro_rent, pro_type, short,
+                           new_rent=new_rent if add_robots else 0,
+                           add_robots=add_robots)
     st.pyplot(fig_econ)
     plt.close(fig_econ)
 
@@ -352,8 +338,6 @@ def render():
         out.to_excel(writer, index=False, sheet_name="PPP")
         opex.to_excel(writer, index=False, sheet_name="OPEX")
         overview.to_excel(writer, index=False, sheet_name="Site overview")
-        if not add_scenario.empty:
-            add_scenario.to_excel(writer, index=False, sheet_name="Add robots")
     st.download_button(
         "Download PPP data (XLSX)", data=buf.getvalue(),
         file_name=f"ppp_{norm.replace(' ', '_')}_{granularity.lower()}_{date_from}_{date_to}.xlsx",
