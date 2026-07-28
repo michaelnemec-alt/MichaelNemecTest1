@@ -1,3 +1,4 @@
+import io
 import math
 import re
 from datetime import date, timedelta
@@ -9,7 +10,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
-from matplotlib.lines import Line2D
 import streamlit as st
 
 from cubeanalytics_utils import (
@@ -37,6 +37,14 @@ _PRO_TYPE = {
 }
 _UPLIFT = {"Ambient": 0.25, "Chilled": 0.40}
 
+# Commercial model per site: "PPP" (pay-per-pick billing), "Per module" (robots ×
+# monthly rent) or "CAPEX" (bought outright). Keyed by parenthesis-free short name.
+# Garching is not a PPP site; the rest are TBD until confirmed by the business.
+_SITE_MODEL = {
+    "Garching Ambient": "CAPEX",
+    "Garching Chilled": "CAPEX",
+}
+
 GREEN = "#00A651"
 GREY = "#888888"
 BLUE = "#1F6FEB"
@@ -56,6 +64,10 @@ def _norm_site(name):
 
 def _env_of(name):
     return "Ambient" if "Ambient" in name else ("Chilled" if "Chilled" in name else "")
+
+
+def _site_model(norm):
+    return _SITE_MODEL.get(norm, "TBD")
 
 
 def _asset_counts(inst_id, date_to):
@@ -182,6 +194,10 @@ def render():
                               ["Picks", "Total bin presentations"],
                               index=0, key="ppp_metric")
 
+    # Half-page table row (filled once figures are computed): left = selected-site
+    # OPEX table, right = overview of all sites and their commercial model.
+    table_area = st.container()
+
     today = date.today()
     default_from = (today.replace(day=1) - timedelta(days=365)).replace(day=1)
     d1, d2, d3, d4 = st.columns(4)
@@ -240,19 +256,37 @@ def render():
     opex = pd.DataFrame(
         {
             "Metric": [
-                "Robots", "Ports", "R5 rent / robot / month",
+                "Commercial model", "Robots", "Ports", "R5 rent / robot / month",
                 "R5 flat rent / month (robots × rent)", "R5 Pro rent / month",
                 "Avg picks / month", f"PPP @ €{cpp:.2f}/pick / month",
             ],
             "Value": [
-                f"{robots:,}", f"{ports:,}", f"€{r5_rent:,.0f}",
+                _site_model(norm), f"{robots:,}", f"{ports:,}", f"€{r5_rent:,.0f}",
                 f"€{monthly_rent:,.0f}",
                 f"€{pro_rent:,.0f}" if pro_rent else "TBD",
                 f"{avg_month_picks:,.0f}", f"€{ppp_month:,.0f}",
             ],
         }
     )
-    st.dataframe(opex, use_container_width=True, hide_index=True)
+    overview = pd.DataFrame(
+        [
+            {
+                "Site": _short_site(n),
+                "Environment": _env_of(n),
+                "Commercial model": _site_model(_norm_site(n)),
+            }
+            for n in site_names
+        ]
+    ).sort_values(["Site"]).reset_index(drop=True)
+
+    with table_area:
+        left, right = st.columns(2)
+        with left:
+            st.markdown(f"##### {short} — OPEX")
+            st.dataframe(opex, use_container_width=True, hide_index=True)
+        with right:
+            st.markdown("##### Site overview — commercial model")
+            st.dataframe(overview, use_container_width=True, hide_index=True)
 
     st.divider()
     st.markdown("##### Pay-per-pick vs monthly robot rent")
@@ -284,11 +318,17 @@ def render():
 
     out = ser.rename(metric_col).reset_index()
     out.columns = [granularity, metric_label]
-    out[f"PPP @ €{cpp:.2f}"] = (ser.values * cpp).round(2) if metric == "Picks" else ""
+    if metric == "Picks":
+        out[f"PPP @ €{cpp:.2f}"] = (ser.values * cpp).round(2)
     st.dataframe(out, use_container_width=True, hide_index=True)
-    csv_bytes = out.to_csv(index=False).encode("utf-8")
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        out.to_excel(writer, index=False, sheet_name="PPP")
+        opex.to_excel(writer, index=False, sheet_name="OPEX")
+        overview.to_excel(writer, index=False, sheet_name="Site overview")
     st.download_button(
-        "Download PPP data (CSV)", data=csv_bytes,
-        file_name=f"ppp_{norm.replace(' ', '_')}_{granularity.lower()}_{date_from}_{date_to}.csv",
-        mime="text/csv", key="ppp_dl",
+        "Download PPP data (XLSX)", data=buf.getvalue(),
+        file_name=f"ppp_{norm.replace(' ', '_')}_{granularity.lower()}_{date_from}_{date_to}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="ppp_dl",
     )
