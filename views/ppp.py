@@ -48,8 +48,8 @@ _SITE_MODEL = {
     "Schönefeld Chilled": "PPP",
     "Vienna Ambient": "PPP",
     "Vienna Chilled": "PPP",
-    "Biatorbágy Ambient": "PPP",
-    "Biatorbágy Chilled": "PPP",
+    "Biatorbágy Ambient": "Per module",
+    "Biatorbágy Chilled": "Per module",
 }
 
 GREEN = "#00A651"
