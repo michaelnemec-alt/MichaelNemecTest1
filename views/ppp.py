@@ -101,6 +101,56 @@ def _asset_counts(inst_id, date_to):
     return robots, ports
 
 
+# Physical-asset groups shown in the per-site module table (installation-data
+# also returns operational/meta groups like xhandler/zone_type which aren't
+# modules, so they're excluded).
+_MODULE_GROUPS = [("robot", "Robots"), ("port", "Ports"),
+                  ("bin", "Bins"), ("charger", "Chargers")]
+
+
+def _module_matrix(installations, date_to):
+    """Latest-snapshot module counts as a rows=module × columns=site table.
+
+    Only modules present at (not null for) at least one site get a row; a blank
+    cell means that site doesn't report that module.
+    """
+    start = date_to - timedelta(days=14)
+    group_label = dict(_MODULE_GROUPS)
+    order = {g: i for i, (g, _) in enumerate(_MODULE_GROUPS)}
+    per_site = {}
+    row_keys = []
+    seen = set()
+    for inst in installations:
+        df = query_installation_data(inst["id"], str(start), str(date_to + timedelta(days=1)))
+        counts = {}
+        if df is not None and not df.empty:
+            latest = df[df["date"] == df["date"].max()]
+            for _, r in latest.iterrows():
+                g = r["group"]
+                if g not in group_label or pd.isna(r["count"]):
+                    continue
+                key = (g, r["type"])
+                counts[key] = int(r["count"])
+                if key not in seen:
+                    seen.add(key)
+                    row_keys.append(key)
+        per_site[_short_site(inst["name"])] = counts
+
+    if not row_keys:
+        return pd.DataFrame()
+
+    row_keys.sort(key=lambda k: (order[k[0]], str(k[1])))
+    site_cols = [_short_site(inst["name"]) for inst in installations]
+    data = {"Category": [group_label[g] for g, _ in row_keys],
+            "Module": [t for _, t in row_keys]}
+    for site in site_cols:
+        data[site] = [per_site[site].get(k) for k in row_keys]
+    df = pd.DataFrame(data)
+    for site in site_cols:
+        df[site] = df[site].astype("Int64")
+    return df
+
+
 def _euro_k(x, _):
     return f"€{x / 1000:.0f}k"
 
@@ -376,3 +426,26 @@ def render():
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="ppp_dl",
     )
+
+    st.divider()
+    st.markdown("##### Modules per site")
+    st.caption(
+        "Latest-snapshot module counts (installation-data) across all sites. "
+        "A blank cell means that site doesn't report that module; rows with no "
+        "data at any site are hidden."
+    )
+    with st.spinner("Loading module counts..."):
+        modules = _module_matrix(installations, date_to)
+    if modules.empty:
+        st.info("No module data available.")
+    else:
+        st.dataframe(modules, use_container_width=True, hide_index=True)
+        mbuf = io.BytesIO()
+        with pd.ExcelWriter(mbuf, engine="openpyxl") as writer:
+            modules.to_excel(writer, index=False, sheet_name="Modules per site")
+        st.download_button(
+            "Download modules table (XLSX)", data=mbuf.getvalue(),
+            file_name=f"modules_per_site_{date_to}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="ppp_modules_dl",
+        )
