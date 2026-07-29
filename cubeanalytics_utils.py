@@ -1,7 +1,11 @@
 """CubeAnalytics API helpers."""
 
+import json
+import os
 import re
 from collections import Counter
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import streamlit as st
 import pandas as pd
@@ -10,6 +14,23 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 BASE_URL = "https://api.cubeanalytics.autostoresystem.com/v1"
+
+# --- Per-day on-disk cache -------------------------------------------------
+# The API is queried by a date range and returns one immutable result object
+# per past day. Re-downloading the whole range on every view / restart is the
+# main bottleneck when self-hosting (slow uplink). So we cache each day's raw
+# response on disk (keyed by installation + endpoint + day) and, on the next
+# request, fetch only the days we don't have yet — typically just the new tail.
+#
+# The cache lives on the Streamlit disk-cache volume (persisted across restarts
+# in the container); override with CUBE_DAY_CACHE_DIR.
+_DAY_CACHE_DIR = Path(
+    os.environ.get("CUBE_DAY_CACHE_DIR", str(Path.home() / ".streamlit" / "cube_day_cache"))
+)
+# Days this recent are always re-fetched (still accumulating / may change);
+# everything older is treated as immutable and cached permanently.
+_REFRESH_TAIL_DAYS = 1
+_ENDPOINT_RE = re.compile(r"/installations/([^/]+)/([^/]+)/?$")
 
 
 @st.cache_resource
@@ -84,11 +105,124 @@ def _fetch_all_pages(url, params):
     return all_results
 
 
+def _iter_days(date_from_str, date_to_str):
+    d0 = datetime.strptime(date_from_str, "%Y-%m-%d").date()
+    d1 = datetime.strptime(date_to_str, "%Y-%m-%d").date()
+    out = []
+    cur = d0
+    while cur <= d1:
+        out.append(cur)
+        cur += timedelta(days=1)
+    return out
+
+
+def _contiguous_groups(days):
+    """Split a sorted list of dates into runs of consecutive days."""
+    if not days:
+        return []
+    days = sorted(days)
+    groups = [[days[0]]]
+    for d in days[1:]:
+        if (d - groups[-1][-1]).days == 1:
+            groups[-1].append(d)
+        else:
+            groups.append([d])
+    return groups
+
+
+def _day_cache_path(installation_id, endpoint, day):
+    return _DAY_CACHE_DIR / str(installation_id) / endpoint / f"{day.isoformat()}.json"
+
+
+def _read_day(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _write_day(path, objs):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(objs, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # cache is best-effort; a write failure just means a re-fetch later
+
+
+def _day_of(obj):
+    d = obj.get("date")
+    if not d:
+        return None
+    try:
+        return datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _fetch_days(url, params):
+    """Range fetch with a per-day disk cache in front of _fetch_all_pages.
+
+    Returns the same list of per-day result objects _fetch_all_pages would,
+    but reads immutable past days from disk and only hits the network for the
+    days that are missing or still recent. Falls back to a plain range fetch if
+    the URL/params don't look like a dated installation query.
+    """
+    m = _ENDPOINT_RE.search(url)
+    if not m or not params or "after" not in params or "before" not in params:
+        return _fetch_all_pages(url, params)
+    installation_id, endpoint = m.group(1), m.group(2)
+    try:
+        days = _iter_days(params["after"], params["before"])
+    except (ValueError, TypeError):
+        return _fetch_all_pages(url, params)
+    if not days:
+        return _fetch_all_pages(url, params)
+
+    fresh_cutoff = datetime.now(timezone.utc).date() - timedelta(days=_REFRESH_TAIL_DAYS)
+
+    cached = {}
+    missing = []
+    for d in days:
+        if d >= fresh_cutoff:
+            missing.append(d)  # too recent to trust the cache — always re-fetch
+            continue
+        objs = _read_day(_day_cache_path(installation_id, endpoint, d))
+        if objs is None:
+            missing.append(d)
+        else:
+            cached[d] = objs
+
+    fetched = {}
+    for group in _contiguous_groups(missing):
+        raw = _fetch_all_pages(
+            url, {"after": group[0].isoformat(), "before": group[-1].isoformat()}
+        )
+        by_day = {}
+        for obj in raw:
+            od = _day_of(obj)
+            if od is not None:
+                by_day.setdefault(od, []).append(obj)
+        for d in group:
+            objs = by_day.get(d, [])
+            fetched[d] = objs
+            if d < fresh_cutoff:  # only persist immutable past days
+                _write_day(_day_cache_path(installation_id, endpoint, d), objs)
+
+    out = []
+    for d in days:
+        out.extend(cached.get(d) if d in cached else fetched.get(d, []))
+    return out
+
+
 @st.cache_data(ttl=86400, persist="disk")
 def query_system_health(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/system-health/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -129,7 +263,7 @@ def query_system_health(installation_id, date_from_str, date_to_str):
 def query_uptime(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/uptime/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -164,7 +298,7 @@ def query_system_mode_periods(installation_id, date_from_str, date_to_str):
     """
     url = f"{BASE_URL}/installations/{installation_id}/uptime/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -206,7 +340,7 @@ def query_system_mode_periods(installation_id, date_from_str, date_to_str):
 def query_robot_state(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/robot-state/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -263,7 +397,7 @@ def query_robot_state_per_robot(installation_id, date_from_str, date_to_str):
     """
     url = f"{BASE_URL}/installations/{installation_id}/robot-state/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -304,7 +438,7 @@ def query_robot_state_per_robot(installation_id, date_from_str, date_to_str):
 def query_bin_presentations(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/bin-presentations/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -347,7 +481,7 @@ def query_bins_above(installation_id, date_from_str, date_to_str):
     """
     url = f"{BASE_URL}/installations/{installation_id}/bins-above/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -383,7 +517,7 @@ def query_bin_usage(installation_id, date_from_str, date_to_str):
     """
     url = f"{BASE_URL}/installations/{installation_id}/port-bin-wait-time/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -418,7 +552,7 @@ def query_bin_usage(installation_id, date_from_str, date_to_str):
 def query_port_uptime(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/port-uptime/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -469,7 +603,7 @@ def query_port_uptime_per_port(installation_id, date_from_str, date_to_str):
     """
     url = f"{BASE_URL}/installations/{installation_id}/port-uptime/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -507,7 +641,7 @@ def query_port_uptime_per_port(installation_id, date_from_str, date_to_str):
 def query_incidents(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/incidents/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -529,8 +663,8 @@ def query_robot_errors(installation_id, date_from_str, date_to_str):
     url_re = f"{BASE_URL}/installations/{installation_id}/robot-errors/"
     url_inc = f"{BASE_URL}/installations/{installation_id}/incidents/"
     params = {"after": date_from_str, "before": date_to_str}
-    re_results = _fetch_all_pages(url_re, params)
-    inc_results = _fetch_all_pages(url_inc, params)
+    re_results = _fetch_days(url_re, params)
+    inc_results = _fetch_days(url_inc, params)
 
     all_errors = []
     for day_result in re_results:
@@ -610,7 +744,7 @@ def query_recovery_times(installation_id, date_from_str, date_to_str):
     """
     url = f"{BASE_URL}/installations/{installation_id}/uptime/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = _recovery_rows_from_uptime(results)
     if not rows:
@@ -677,7 +811,7 @@ def query_port_wait_time_daily(installation_id, date_from_str, date_to_str):
     """
     url = f"{BASE_URL}/installations/{installation_id}/port-bin-wait-time/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     # key -> [count, sum(wait_bin*count), sum(wait_user*count), sum(waste*count)]
     agg = {}
@@ -733,7 +867,7 @@ def query_port_wait_time(installation_id, date_from_str, date_to_str):
     """Fetch port-bin-wait-time data and return a DataFrame matching the CSV format."""
     url = f"{BASE_URL}/installations/{installation_id}/port-bin-wait-time/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -785,7 +919,7 @@ def query_installation_data(installation_id, date_from_str, date_to_str):
     """
     url = f"{BASE_URL}/installations/{installation_id}/installation-data/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
@@ -849,7 +983,7 @@ def query_module_versions(installation_id, date_from_str, date_to_str):
     """
     url = f"{BASE_URL}/installations/{installation_id}/module-versions/"
     params = {"after": date_from_str, "before": date_to_str}
-    results = _fetch_all_pages(url, params)
+    results = _fetch_days(url, params)
 
     rows = []
     for day_result in results:
