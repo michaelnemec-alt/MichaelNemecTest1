@@ -13,6 +13,9 @@ services:
       SNOWFLAKE_ACCOUNT: ${SNOWFLAKE_ACCOUNT:-}
       SNOWFLAKE_USER: ${SNOWFLAKE_USER:-}
       SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD:-}
+      # Peak-memory guard: max concurrent (site × endpoint) fetches. Lower it on
+      # a RAM-constrained NAS; raise it for speed on a bigger box.
+      CUBE_MAX_CONCURRENT_FETCHES: ${CUBE_MAX_CONCURRENT_FETCHES:-4}
     volumes:
       # Persist the on-disk @st.cache_data across restarts (Streamlit writes its
       # disk cache under $HOME/.streamlit, i.e. /root/.streamlit in the image).

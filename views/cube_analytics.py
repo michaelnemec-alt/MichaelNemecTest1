@@ -6,12 +6,23 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
 import logging
 import numbers
+import os
 import re
+import threading
 import time
 import traceback
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("cube_analytics")
+
+# Global cap on how many (site × endpoint) fetches run at once. Several views
+# submit multiple _load_for_sites calls in parallel and each fans out over every
+# site, so without a shared bound the peak was ~50 concurrent 90-day fetches —
+# each holding a site's raw JSON in memory. This semaphore keeps peak RAM flat
+# regardless of range length or how many pools are active. Override with
+# CUBE_MAX_CONCURRENT_FETCHES.
+_MAX_CONCURRENT_FETCHES = max(1, int(os.environ.get("CUBE_MAX_CONCURRENT_FETCHES", "4")))
+_FETCH_SEMAPHORE = threading.BoundedSemaphore(_MAX_CONCURRENT_FETCHES)
 
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
@@ -212,7 +223,8 @@ def _load_for_sites(query_fn, date_from_str, date_to_str):
     def _fetch(inst):
         try:
             t1 = time.time()
-            df = query_fn(inst["id"], date_from_str, date_to_str)
+            with _FETCH_SEMAPHORE:  # bound peak memory across all parallel pools
+                df = query_fn(inst["id"], date_from_str, date_to_str)
             logger.info("  %s / %s fetched %d rows in %.1fs", fn_name, inst["name"], len(df), time.time() - t1)
             if not df.empty:
                 df["site"] = inst["name"]
@@ -222,7 +234,7 @@ def _load_for_sites(query_fn, date_from_str, date_to_str):
             logger.error("  %s / %s FAILED: %s", fn_name, inst["name"], e)
             return None
 
-    with ThreadPoolExecutor(max_workers=len(installations)) as pool:
+    with ThreadPoolExecutor(max_workers=max(1, min(len(installations), _MAX_CONCURRENT_FETCHES))) as pool:
         futures = {pool.submit(_fetch, inst): inst for inst in installations}
         for f in as_completed(futures):
             result = f.result()
