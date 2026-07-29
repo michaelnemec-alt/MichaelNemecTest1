@@ -1540,14 +1540,6 @@ def _view_port_detail(date_from_str, date_to_str, aggregation):
         margin=dict(l=10, r=140, t=10, b=10),
         plot_bgcolor="white", showlegend=False,
     )
-    _chart_title_with_info(
-        "Per-port Uptime",
-        f"Uptime per port for {_short_site(selected_site)}, worst first. Red = more than "
-        "1pp below the site average, orange = below average, green = at/above. "
-        "The dashed line is the site average.",
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
     tbl = g.sort_values(["port_num", "port"]).copy()
     tbl["Port"] = tbl["port"].apply(lambda p: f"Port {p}")
     tbl = tbl.rename(columns={
@@ -1557,11 +1549,24 @@ def _view_port_detail(date_from_str, date_to_str, aggregation):
     tbl["Downtime (min)"] = tbl["Downtime (min)"].round(0)
     tbl["Outages"] = tbl["Outages"].astype(int)
     show = tbl[["Port", "Uptime %", "Downtime (min)", "Outages", "Utilization %"]]
-    _render_colored_table(
-        show,
-        num_cols=["Uptime %", "Downtime (min)", "Outages", "Utilization %"],
-        color_funcs={"Uptime %": _color_availability},
-    )
+
+    col_chart, col_tbl = st.columns([3, 2], gap="medium")
+    with col_chart:
+        _chart_title_with_info(
+            "Per-port Uptime",
+            f"Uptime per port for {_short_site(selected_site)}, worst first. Red = more than "
+            "1pp below the site average, orange = below average, green = at/above. "
+            "The dashed line is the site average.",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    with col_tbl:
+        st.markdown("###### Port uptime table — click a header to sort")
+        _render_sortable_colored_table(
+            show,
+            num_cols=["Uptime %", "Downtime (min)", "Utilization %"],
+            color_funcs={"Uptime %": _color_availability},
+            key="tbl_port_detail",
+        )
 
     st.divider()
     csv_bytes = show.to_csv(index=False).encode("utf-8")
@@ -1654,14 +1659,7 @@ def _view_robot_detail(date_from_str, date_to_str, aggregation):
         margin=dict(l=10, r=140, t=10, b=10),
         plot_bgcolor="white", showlegend=False,
     )
-    extra = "" if len(g) <= top_n else f" (worst {top_n} of {len(g)} robots shown; full list in the table below)"
-    _chart_title_with_info(
-        "Per-robot Uptime",
-        f"Uptime per robot for {_short_site(selected_site)}, worst first{extra}. "
-        "Red = more than 1pp below the site average, orange = below average, "
-        "green = at/above. The dashed line is the site average.",
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    extra = "" if len(g) <= top_n else f" (worst {top_n} of {len(g)} robots shown; full list in the table)"
 
     tbl = g.sort_values(["robot_num", "robot_id"]).copy()
     tbl["Robot"] = tbl["robot_id"].apply(lambda r: f"Robot {r}")
@@ -1673,11 +1671,24 @@ def _view_robot_detail(date_from_str, date_to_str, aggregation):
     tbl["Downtime (min)"] = tbl["Downtime (min)"].round(0)
     tbl["Battery %"] = tbl["Battery %"].round(1)
     show = tbl[["Robot", "Type", "Uptime %", "Downtime (min)", "Working %", "Battery %"]]
-    _render_colored_table(
-        show,
-        num_cols=["Uptime %", "Downtime (min)", "Working %", "Battery %"],
-        color_funcs={"Uptime %": _color_availability},
-    )
+
+    col_chart, col_tbl = st.columns([3, 2], gap="medium")
+    with col_chart:
+        _chart_title_with_info(
+            "Per-robot Uptime",
+            f"Uptime per robot for {_short_site(selected_site)}, worst first{extra}. "
+            "Red = more than 1pp below the site average, orange = below average, "
+            "green = at/above. The dashed line is the site average.",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    with col_tbl:
+        st.markdown("###### Robot uptime table — click a header to sort")
+        _render_sortable_colored_table(
+            show,
+            num_cols=["Uptime %", "Downtime (min)", "Working %", "Battery %"],
+            color_funcs={"Uptime %": _color_availability},
+            key="tbl_robot_detail",
+        )
 
     st.divider()
     buf = io.BytesIO()
@@ -2023,6 +2034,27 @@ def _render_colored_table(df, num_cols, color_funcs=None):
         f'<thead><tr>{header}</tr></thead><tbody>{"".join(body)}</tbody></table></div>'
     )
     st.markdown(html, unsafe_allow_html=True)
+
+
+def _render_sortable_colored_table(df, num_cols, color_funcs=None, key=None):
+    """Sortable table (click a column header to sort) with optional per-column
+    background colouring. Uses st.dataframe + a pandas Styler so the underlying
+    numeric values drive the sort, not the formatted text."""
+    color_funcs = color_funcs or {}
+    num_cols = [c for c in num_cols if c in df.columns]
+    sty = df.style
+    for col, fn in color_funcs.items():
+        if col not in df.columns:
+            continue
+
+        def _bg(v, fn=fn):
+            bg = fn(v) if pd.notna(v) else ""
+            return f"background-color:{bg}" if bg else ""
+
+        sty = sty.map(_bg, subset=[col])
+    if num_cols:
+        sty = sty.format({c: "{:.1f}" for c in num_cols}, na_rep="—")
+    st.dataframe(sty, use_container_width=True, hide_index=True, key=key)
 
 
 def render_autostore(selected_view="Versions of Systems"):
