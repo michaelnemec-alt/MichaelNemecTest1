@@ -253,6 +253,54 @@ def query_robot_state(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=86400, persist="disk")
+def query_robot_state_per_robot(installation_id, date_from_str, date_to_str):
+    """Per (date, robot) uptime metrics for a single installation.
+
+    query_robot_state sums every robot into one site figure; this keeps each
+    robot separate so a site can be broken down robot by robot. Down time =
+    recovery + unavailable + service on/off grid, matching the site robot-uptime
+    definition; uptime_pct = (total_time - down) / total_time x 100.
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/robot-state/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_all_pages(url, params)
+
+    rows = []
+    for day_result in results:
+        d = day_result.get("date")
+        robot_states = day_result.get("result", {}).get("robot_states", {})
+        all_robots = []
+        if isinstance(robot_states, dict):
+            for hour_robots in robot_states.values():
+                if isinstance(hour_robots, list):
+                    all_robots.extend(hour_robots)
+        elif isinstance(robot_states, list):
+            all_robots = robot_states
+        for r in all_robots:
+            rows.append({
+                "date": d,
+                "robot_id": r.get("robot_id"),
+                "robot_type": r.get("robot_type", ""),
+                "total_time_s": r.get("total_time_s", 0) or 0,
+                "working": r.get("working", 0) or 0,
+                "available": r.get("available", 0) or 0,
+                "charging_available": r.get("charging_available", 0) or 0,
+                "charging_unavailable": r.get("charging_unavailable", 0) or 0,
+                "recovery": r.get("recovery", 0) or 0,
+                "unavailable": r.get("unavailable", 0) or 0,
+                "service_on_grid": r.get("service_on_grid", 0) or 0,
+                "service_off_grid": r.get("service_off_grid", 0) or 0,
+                "battery_pct_avg": r.get("battery_pct_avg"),
+            })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=86400, persist="disk")
 def query_bin_presentations(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/bin-presentations/"
     params = {"after": date_from_str, "before": date_to_str}

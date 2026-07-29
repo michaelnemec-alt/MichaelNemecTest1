@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import io
 import logging
 import numbers
 import re
@@ -15,7 +16,7 @@ logger = logging.getLogger("cube_analytics")
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_system_mode_periods,
-    query_robot_state, query_bin_presentations,
+    query_robot_state, query_robot_state_per_robot, query_bin_presentations,
     query_port_wait_time_daily, query_port_uptime, query_port_uptime_per_port,
     query_incidents, query_robot_errors,
     query_recovery_times, query_installation_data, query_module_versions, query_bins_above,
@@ -335,6 +336,8 @@ def render(selected_view="Overview & Health"):
             _view_module_ports(date_from_str, date_to_str, aggregation)
         elif selected_view == "Port Detailed Overview":
             _view_port_detail(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Robot Detailed Overview":
+            _view_robot_detail(date_from_str, date_to_str, aggregation)
         elif selected_view == "Chargers":
             _view_module_chargers(date_from_str, date_to_str, aggregation)
         elif selected_view == "System":
@@ -1566,6 +1569,125 @@ def _view_port_detail(date_from_str, date_to_str, aggregation):
         "Download per-port data", data=csv_bytes,
         file_name=f"port_detail_{_short_site(selected_site)}_{date_from_str}_{date_to_str}.csv",
         mime="text/csv", key="dl_port_detail",
+    )
+
+
+def _view_robot_detail(date_from_str, date_to_str, aggregation):
+    st.markdown("#### Robots — Detailed Overview")
+    st.caption(
+        "Per-robot uptime for a single site, so you can spot which robots drag "
+        "the site's Robot Uptime down. Uptime % = (total time − down) ÷ total "
+        "time, where down = recovery + unavailable + service on/off grid "
+        "(matching the site Robot Uptime definition)."
+    )
+
+    try:
+        installations = get_installations()
+    except Exception as e:
+        st.error(f"Failed to fetch installations: {e}")
+        return
+    site_names = sorted(inst["name"] for inst in installations)
+    if not site_names:
+        st.warning("No sites available.")
+        return
+
+    name_to_id = {inst["name"]: inst["id"] for inst in installations}
+    selected_site = st.selectbox(
+        "Site", site_names, index=0, key="robot_detail_site",
+        format_func=_short_site,
+    )
+    inst_id = name_to_id[selected_site]
+
+    with st.spinner("Loading per-robot metrics..."):
+        df = query_robot_state_per_robot(inst_id, date_from_str, date_to_str)
+    if df.empty:
+        st.warning("No per-robot data returned for this site and period.")
+        return
+
+    g = df.groupby("robot_id", as_index=False).agg(
+        robot_type=("robot_type", "last"),
+        total_time_s=("total_time_s", "sum"),
+        working=("working", "sum"),
+        recovery=("recovery", "sum"),
+        unavailable=("unavailable", "sum"),
+        service_on_grid=("service_on_grid", "sum"),
+        service_off_grid=("service_off_grid", "sum"),
+        battery_pct_avg=("battery_pct_avg", "mean"),
+    )
+    down = (g["recovery"] + g["unavailable"]
+            + g["service_on_grid"] + g["service_off_grid"])
+    tt = g["total_time_s"]
+    g["uptime_pct"] = ((tt - down) / tt * 100).where(tt > 0, 0.0)
+    g["downtime_min"] = down / 60.0
+    g["working_pct"] = (g["working"] / tt * 100).where(tt > 0, 0.0)
+    g["robot_num"] = pd.to_numeric(g["robot_id"], errors="coerce")
+    g = g.sort_values("uptime_pct", ascending=True).reset_index(drop=True)
+
+    site_avg = g["uptime_pct"].mean()
+
+    def _bar_color(u):
+        if u < site_avg - 1:
+            return "#c0392b"
+        if u < site_avg:
+            return "#e8873a"
+        return "#7ab648"
+
+    top_n = min(40, len(g))
+    worst = g.head(top_n)
+    colors = [_bar_color(u) for u in worst["uptime_pct"]]
+    labels = [f"Robot {r}" for r in worst["robot_id"]]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=worst["uptime_pct"], y=labels, orientation="h",
+        marker_color=colors,
+        text=[f"{u:.1f}%  ({m:.0f} min down)"
+              for u, m in zip(worst["uptime_pct"], worst["downtime_min"])],
+        textposition="outside", cliponaxis=False,
+        hovertemplate="%{y}: %{x:.2f}% uptime<extra></extra>",
+    ))
+    fig.add_vline(x=site_avg, line_dash="dash", line_color="#1F3864",
+                  annotation_text=f"site avg {site_avg:.1f}%", annotation_position="top")
+    x_lo = max(0, min(worst["uptime_pct"].min() - 1, 95))
+    fig.update_xaxes(range=[x_lo, 100.6], title="Uptime %", showgrid=True, gridcolor="#eee")
+    fig.update_layout(
+        height=max(320, 26 * len(worst)),
+        margin=dict(l=10, r=140, t=10, b=10),
+        plot_bgcolor="white", showlegend=False,
+    )
+    extra = "" if len(g) <= top_n else f" (worst {top_n} of {len(g)} robots shown; full list in the table below)"
+    _chart_title_with_info(
+        "Per-robot Uptime",
+        f"Uptime per robot for {_short_site(selected_site)}, worst first{extra}. "
+        "Red = more than 1pp below the site average, orange = below average, "
+        "green = at/above. The dashed line is the site average.",
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    tbl = g.sort_values(["robot_num", "robot_id"]).copy()
+    tbl["Robot"] = tbl["robot_id"].apply(lambda r: f"Robot {r}")
+    tbl = tbl.rename(columns={
+        "robot_type": "Type", "uptime_pct": "Uptime %",
+        "downtime_min": "Downtime (min)", "working_pct": "Working %",
+        "battery_pct_avg": "Battery %",
+    })
+    tbl["Downtime (min)"] = tbl["Downtime (min)"].round(0)
+    tbl["Battery %"] = tbl["Battery %"].round(1)
+    show = tbl[["Robot", "Type", "Uptime %", "Downtime (min)", "Working %", "Battery %"]]
+    _render_colored_table(
+        show,
+        num_cols=["Uptime %", "Downtime (min)", "Working %", "Battery %"],
+        color_funcs={"Uptime %": _color_availability},
+    )
+
+    st.divider()
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        show.to_excel(writer, index=False, sheet_name="Robot uptime")
+    st.download_button(
+        "Download per-robot data (XLSX)", data=buf.getvalue(),
+        file_name=f"robot_detail_{_short_site(selected_site)}_{date_from_str}_{date_to_str}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dl_robot_detail",
     )
 
 
