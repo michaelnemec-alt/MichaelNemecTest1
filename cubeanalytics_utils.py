@@ -84,20 +84,34 @@ def _headers():
     return {"API-Authorization": f"Token {token}"}
 
 
+# Installations whose name contains any of these (case-insensitive) are hidden
+# everywhere — e.g. the AutoStore demo site, which isn't a real warehouse.
+# Override with a comma-separated CUBE_EXCLUDE_INSTALLATIONS.
+_EXCLUDE_INSTALLATIONS = [
+    s.strip().lower()
+    for s in os.environ.get("CUBE_EXCLUDE_INSTALLATIONS", "demo").split(",")
+    if s.strip()
+]
+
+
 @st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
 def get_installations():
     """Fetch the list of installations the token has access to.
 
-    Returns a list of dicts with keys: id, name, city, country.
+    Returns a list of dicts with keys: id, name, city, country. Excludes
+    installations matching _EXCLUDE_INSTALLATIONS (e.g. the demo site).
     """
     resp = _session().get(f"{BASE_URL}/installations/", headers=_headers(), timeout=30)
     resp.raise_for_status()
     data = resp.json()
     installations = []
     for r in data.get("results", []):
+        name = r["name"]
+        if any(term in name.lower() for term in _EXCLUDE_INSTALLATIONS):
+            continue
         installations.append({
             "id": r["id"],
-            "name": r["name"],
+            "name": name,
             "city": r.get("city", ""),
             "country": r.get("country", ""),
         })
