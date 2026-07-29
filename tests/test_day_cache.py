@@ -105,15 +105,38 @@ def test_results_are_date_ordered():
     _with_cache(run)
 
 
-def test_recent_tail_is_never_cached():
+def test_recent_tail_reused_while_fresh():
     def run(rec):
         today = date.today()
         frm = today - timedelta(days=3)
-        c._fetch_days(URL, {"after": _iso(frm), "before": _iso(today)})
-        rec.calls.clear()
-        # Today/yesterday still accumulate, so a repeat must re-fetch the tail.
-        c._fetch_days(URL, {"after": _iso(frm), "before": _iso(today)})
-        assert rec.calls, "recent days must be re-fetched, not served from cache"
+        orig_ttl = c._FRESH_TTL_SECONDS
+        c._FRESH_TTL_SECONDS = 900  # generous freshness window
+        try:
+            c._fetch_days(URL, {"after": _iso(frm), "before": _iso(today)})
+            rec.calls.clear()
+            # Repeat within the freshness window: recent days come from disk.
+            c._fetch_days(URL, {"after": _iso(frm), "before": _iso(today)})
+            assert not rec.calls, "fresh recent days must be served from disk, not re-fetched"
+        finally:
+            c._FRESH_TTL_SECONDS = orig_ttl
+    _with_cache(run)
+
+
+def test_recent_tail_refetched_when_stale():
+    def run(rec):
+        today = date.today()
+        frm = today - timedelta(days=3)
+        orig_ttl = c._FRESH_TTL_SECONDS
+        c._FRESH_TTL_SECONDS = 0  # nothing recent is ever considered fresh
+        try:
+            c._fetch_days(URL, {"after": _iso(frm), "before": _iso(today)})
+            rec.calls.clear()
+            c._fetch_days(URL, {"after": _iso(frm), "before": _iso(today)})
+            assert rec.calls, "stale recent days must be re-fetched"
+            # ...but the immutable past days are still not re-fetched.
+            assert today - timedelta(days=3) not in rec.fetched_days
+        finally:
+            c._FRESH_TTL_SECONDS = orig_ttl
     _with_cache(run)
 
 

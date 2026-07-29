@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -27,9 +28,13 @@ BASE_URL = "https://api.cubeanalytics.autostoresystem.com/v1"
 _DAY_CACHE_DIR = Path(
     os.environ.get("CUBE_DAY_CACHE_DIR", str(Path.home() / ".streamlit" / "cube_day_cache"))
 )
-# Days this recent are always re-fetched (still accumulating / may change);
-# everything older is treated as immutable and cached permanently.
+# Days this recent are still accumulating (may change), so their cached copy is
+# only trusted for _FRESH_TTL_SECONDS before being re-fetched. Older days are
+# immutable and cached permanently. Recent days are still written to disk so
+# that rapidly changing the date range (e.g. 30d -> 14d, both ending today)
+# reuses what was just downloaded instead of re-hitting the network every time.
 _REFRESH_TAIL_DAYS = 1
+_FRESH_TTL_SECONDS = int(os.environ.get("CUBE_FRESH_TTL_SECONDS", "900"))  # 15 min
 _ENDPOINT_RE = re.compile(r"/installations/([^/]+)/([^/]+)/?$")
 
 # Cap per-function in-memory cache entries. Without this, @st.cache_data grows
@@ -142,11 +147,20 @@ def _day_cache_path(installation_id, endpoint, day):
 
 
 def _read_day(path):
+    """Return (objs, fetched_epoch) for a cached day, or None if absent/unreadable.
+
+    Tolerates the legacy on-disk format (a bare list with no timestamp), which
+    is treated as immutable (fetched_epoch = 0)."""
     try:
         with open(path) as f:
-            return json.load(f)
+            data = json.load(f)
     except (OSError, ValueError):
         return None
+    if isinstance(data, dict) and "objs" in data:
+        return data["objs"], float(data.get("fetched", 0) or 0)
+    if isinstance(data, list):
+        return data, 0.0
+    return None
 
 
 def _write_day(path, objs):
@@ -154,7 +168,7 @@ def _write_day(path, objs):
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
         with open(tmp, "w") as f:
-            json.dump(objs, f)
+            json.dump({"objs": objs, "fetched": time.time()}, f)
         os.replace(tmp, path)
     except OSError:
         pass  # cache is best-effort; a write failure just means a re-fetch later
@@ -190,18 +204,21 @@ def _fetch_days(url, params):
         return _fetch_all_pages(url, params)
 
     fresh_cutoff = datetime.now(timezone.utc).date() - timedelta(days=_REFRESH_TAIL_DAYS)
+    now = time.time()
 
     cached = {}
     missing = []
     for d in days:
-        if d >= fresh_cutoff:
-            missing.append(d)  # too recent to trust the cache — always re-fetch
-            continue
-        objs = _read_day(_day_cache_path(installation_id, endpoint, d))
-        if objs is None:
+        entry = _read_day(_day_cache_path(installation_id, endpoint, d))
+        if entry is None:
             missing.append(d)
-        else:
+            continue
+        objs, fetched_at = entry
+        if d < fresh_cutoff or (now - fetched_at) < _FRESH_TTL_SECONDS:
+            # Immutable past day, or a recent day whose copy is still fresh.
             cached[d] = objs
+        else:
+            missing.append(d)  # recent day, cached copy is stale — re-fetch
 
     fetched = {}
     for group in _contiguous_groups(missing):
@@ -216,8 +233,7 @@ def _fetch_days(url, params):
         for d in group:
             objs = by_day.get(d, [])
             fetched[d] = objs
-            if d < fresh_cutoff:  # only persist immutable past days
-                _write_day(_day_cache_path(installation_id, endpoint, d), objs)
+            _write_day(_day_cache_path(installation_id, endpoint, d), objs)
 
     out = []
     for d in days:
