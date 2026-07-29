@@ -15,6 +15,10 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
+# Make the date_input calendar start on Monday (browser-locale independent).
+COPY scripts/patch_streamlit_weekstart.py /tmp/patch_streamlit_weekstart.py
+RUN python /tmp/patch_streamlit_weekstart.py
+
 # App source.
 COPY . .
 
