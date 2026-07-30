@@ -1237,3 +1237,35 @@ def _flatten_event_data(data):
                 out.append({**scalars, key: item})
         return out or [scalars]
     return [_flatten_one(data)]
+
+
+@st.cache_data(ttl=3600, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
+def query_access_point_load(installation_id, date_from_str, date_to_str):
+    """Hourly radio load per access point (REST /access-point-load).
+
+    Returns a tidy DataFrame with one row per (access point, hour):
+    ts, ap_id, x, y, channel, load (avg), peak_ap_load. Historical/daily data
+    (not live), hourly resolution.
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/access-point-load/"
+    params = {"after": date_from_str, "before": date_to_str}
+    rows = []
+    for day_result in _fetch_days(url, params):
+        apl = day_result.get("result", {}).get("access_point_load", {})
+        for ap_id, ap in apl.items():
+            for hl in ap.get("hourly_load", []):
+                rows.append({
+                    "ts": hl.get("hour"),
+                    "ap_id": str(ap_id),
+                    "x": ap.get("x"),
+                    "y": ap.get("y"),
+                    "channel": ap.get("channel"),
+                    "load": hl.get("load"),
+                    "peak_ap_load": hl.get("peak_ap_load"),
+                })
+    cols = ["ts", "ap_id", "x", "y", "channel", "load", "peak_ap_load"]
+    df = pd.DataFrame(rows, columns=cols)
+    if not df.empty:
+        df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
+        df = df.dropna(subset=["ts"]).sort_values(["ts", "ap_id"]).reset_index(drop=True)
+    return df

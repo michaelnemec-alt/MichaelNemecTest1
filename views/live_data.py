@@ -6,6 +6,7 @@ the API. A day selector narrows the 48h window to a single calendar day so the
 5-min detail stays readable.
 """
 import io
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -13,8 +14,10 @@ import streamlit as st
 from cubeanalytics_utils import (
     is_api_configured, get_installations, LIVE_EVENT_TYPES,
     query_live_jobs, query_live_robots, query_live_robot_battery,
-    query_live_event_table,
+    query_live_event_table, query_access_point_load,
 )
+
+_ACCESS_POINT_LOAD = "ACCESS_POINT_LOAD"
 
 _EVENT_LABELS = {
     "BIN_AND_TASK": "Jobs (bin & task)",
@@ -26,7 +29,10 @@ _EVENT_LABELS = {
     "PORT_STATE": "Ports (state)",
     "PORT_ERROR": "Port errors",
     "ROBOT_ERROR": "Robot errors",
+    _ACCESS_POINT_LOAD: "Access point load (radio, hourly)",
 }
+
+_EVENT_TYPES = list(LIVE_EVENT_TYPES) + [_ACCESS_POINT_LOAD]
 
 _JOB_SERIES = [
     "total", "active", "unique", "total_prepared", "unique_prepared",
@@ -159,6 +165,33 @@ def _render_generic(inst_id, event_type, label):
     _download(d, f"{label}_{event_type.lower()}.csv", f"dl_live_{event_type}_page")
 
 
+def _render_access_point_load(inst_id, label):
+    today = date.today()
+    df = query_access_point_load(inst_id, str(today - timedelta(days=3)),
+                                 str(today + timedelta(days=1)))
+    if df.empty:
+        st.warning("No access-point-load data for this site.")
+        return
+    day = _day_picker(df, "live_apl_day")
+    d = _filter_day(df, day)
+    if d.empty:
+        st.info("No data for the selected day.")
+        return
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Access points", d["ap_id"].nunique())
+    c2.metric("Avg load", round(float(d["load"].mean()), 1))
+    c3.metric("Peak load", int(d["peak_ap_load"].max()))
+    st.markdown("**Average load per access point (hourly)**")
+    avg = d.pivot_table(index="ts", columns="ap_id", values="load", aggfunc="mean")
+    _line_chart(avg.reset_index(), list(avg.columns))
+    st.markdown("**Peak load per access point (hourly)**")
+    peak = d.pivot_table(index="ts", columns="ap_id", values="peak_ap_load", aggfunc="max")
+    _line_chart(peak.reset_index(), list(peak.columns))
+    st.markdown("**Data**")
+    st.dataframe(d, use_container_width=True, hide_index=True)
+    _download(d, f"{label}_access_point_load.csv", "dl_live_apl_page")
+
+
 def render():
     st.markdown("### Live data")
     st.caption("CubeAnalytics live event stream for one site — last ~48h, "
@@ -184,17 +217,19 @@ def render():
     site_label = col_site.selectbox("Site", list(inst_by_label.keys()),
                                     key="live_site")
     event_type = col_evt.selectbox(
-        "Event type", LIVE_EVENT_TYPES,
+        "Event type", _EVENT_TYPES,
         format_func=lambda e: _EVENT_LABELS.get(e, e), key="live_event_type")
     inst_id = inst_by_label[site_label]
 
     st.divider()
-    with st.spinner(f"Loading {event_type} (last 48h)..."):
+    with st.spinner(f"Loading {event_type}..."):
         try:
             if event_type == "BIN_AND_TASK":
                 _render_jobs(inst_id, site_label)
             elif event_type == "ROBOT_STATE":
                 _render_robots(inst_id, site_label)
+            elif event_type == _ACCESS_POINT_LOAD:
+                _render_access_point_load(inst_id, site_label)
             else:
                 _render_generic(inst_id, event_type, site_label)
         except Exception as e:
