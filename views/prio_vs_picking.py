@@ -745,6 +745,8 @@ def _date_grid_picker(dates, key_prefix):
     clickable and days without data are plain. Returns the selected date."""
     st.html(
         "<style>"
+        "div[data-testid='stHorizontalBlock']{gap:0.35rem !important;"
+        "margin-bottom:-0.6rem !important}"
         "div[data-testid='stColumn'] button{padding:2px 2px !important;"
         "min-height:0 !important}"
         "div[data-testid='stColumn'] button p{white-space:nowrap !important;"
