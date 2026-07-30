@@ -2264,17 +2264,29 @@ def _view_versions(date_from_str, date_to_str):
     _render_version_table(table)
 
 
-def _fleet_max_by_sub(df_module):
-    """Newest fleet-wide version per sub_module (only version-looking values)."""
+def _fleet_max_by_type_sub(df_module):
+    """Newest version per (device type, sub_module) across the fleet.
+
+    Keyed by the device's TYPE (e.g. R5 vs R5.1 Pro) so a device is only ever
+    compared against the same robot/port type, which legitimately runs its own
+    firmware line. Categories without a TYPE (access points) key on None.
+    """
+    type_rows = df_module[df_module["sub_module"] == "TYPE"]
+    dev_type = dict(zip(zip(type_rows["site"], type_rows["module_id"]),
+                        type_rows["value"]))
     out = {}
-    for sm, grp in df_module.groupby("sub_module"):
-        keys = [
-            _version_key(v) for v in grp["value"]
-            if _VERSION_LIKE.match(str(v))
-        ]
-        keys = [k for k in keys if k]
-        if keys:
-            out[sm] = max(keys)
+    for site, module_id, sub_module, value in zip(
+        df_module["site"], df_module["module_id"],
+        df_module["sub_module"], df_module["value"],
+    ):
+        if not _VERSION_LIKE.match(str(value)):
+            continue
+        k = _version_key(value)
+        if not k:
+            continue
+        key = (dev_type.get((site, module_id)), sub_module)
+        if key not in out or k > out[key]:
+            out[key] = k
     return out
 
 
@@ -2286,21 +2298,26 @@ def _module_id_sort_key(v):
 def _render_device_table(table, ref_max, row_label):
     """Per-device version table (device rows x sub-module columns).
 
-    A cell is red when its version-looking value is behind the fleet-newest for
-    that sub-module (ref_max, computed across all sites). Descriptive values
-    (TYPE, GRIPPER, bin type, ...) are shown as-is without highlighting.
+    A cell is red when its version-looking value is behind the newest version
+    run by the same device type for that sub-module (ref_max keyed by
+    (type, sub_module)). Descriptive values (TYPE, GRIPPER, bin type, ...) are
+    shown as-is without highlighting.
     """
     cols = list(table.columns)
+    has_type = "TYPE" in cols
     header = "".join(f"<th>{c}</th>" for c in cols)
     rows = []
     for dev, row in table.iterrows():
+        dev_type = row["TYPE"] if has_type else None
+        if dev_type == "\u2014":
+            dev_type = None
         cells = []
         for c in cols:
             val = row[c]
             cls = ""
             if _VERSION_LIKE.match(str(val)):
                 k = _version_key(val)
-                mx = ref_max.get(c, ())
+                mx = ref_max.get((dev_type, c))
                 if k and mx and k < mx:
                     cls = ' class="as-outdated"'
             cells.append(f"<td{cls}>{val}</td>")
@@ -2323,8 +2340,9 @@ def _view_module_versions(date_from_str, date_to_str):
         "Per-device firmware from the module-versions endpoint: one row per "
         "device (robot / port / charger / access point) for the selected site, "
         "columns are that device's components. Version-looking cells are "
-        "highlighted red when the device lags behind the newest version any "
-        "device in the fleet (all sites) runs for that component.",
+        "highlighted red when the device lags behind the newest version run by "
+        "the same device type (e.g. R5 vs R5, R5.1 Pro vs R5.1 Pro) across the "
+        "fleet for that component.",
     )
     if df.empty:
         st.warning("No module-version data returned for the selected range.")
@@ -2348,7 +2366,7 @@ def _view_module_versions(date_from_str, date_to_str):
     sub = mod_rows[mod_rows["site"] == site_sel]
     st.caption(f"{_site_code(site_sel)}: {sub['module_id'].nunique()} devices")
 
-    ref_max = _fleet_max_by_sub(mod_rows)
+    ref_max = _fleet_max_by_type_sub(mod_rows)
     table = sub.pivot_table(
         index="module_id", columns="sub_module", values="value", aggfunc="first"
     )
