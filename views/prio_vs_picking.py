@@ -882,41 +882,54 @@ def render():
             st.caption("Tip: switch the data source to **Saved history** to browse "
                        "previously uploaded days.")
         return
-    try:
-        df_raw = pd.read_csv(uploaded_file, sep=";")
-    except Exception as e:
-        st.error(f"Error reading CSV: {e}")
-        return
-    required = ["AutoStore", "Type", "Prioritization Time", "Finished Picking At"]
-    missing = [c for c in required if c not in df_raw.columns]
-    if missing:
-        st.error(f"Missing columns: **{missing}**")
-        return
+    # Ingest each uploaded file only once. Streamlit re-runs the whole script on
+    # every widget change (e.g. picking a different date), so without this guard
+    # the file would be re-parsed and re-stored on each rerun.
+    sig = f"{uploaded_file.name}:{uploaded_file.size}"
+    if st.session_state.get("prio_ingested_sig") != sig:
+        try:
+            df_raw = pd.read_csv(uploaded_file, sep=";")
+        except Exception as e:
+            st.error(f"Error reading CSV: {e}")
+            return
+        required = ["AutoStore", "Type", "Prioritization Time", "Finished Picking At"]
+        missing = [c for c in required if c not in df_raw.columns]
+        if missing:
+            st.error(f"Missing columns: **{missing}**")
+            return
 
-    df = _parse_df(df_raw)
-    if df.empty:
-        st.warning("No STANDARD/EXPRESS rows with valid timestamps in the file.")
-        return
-    warehouse = _warehouse_of(df)
-    site_map, site = _resolve_cap_site(warehouse, show_capacity)
-    plan_by_date = _parse_plan(plan_file)
+        df = _parse_df(df_raw)
+        if df.empty:
+            st.warning("No STANDARD/EXPRESS rows with valid timestamps in the file.")
+            return
+        warehouse = _warehouse_of(df)
+        site_map, site = _resolve_cap_site(warehouse, show_capacity)
+        plan_by_date = _parse_plan(plan_file)
 
-    store_dates, dropped = _ingest_upload(
-        df, warehouse, site_map, site, show_capacity, plan_by_date,
-        source=uploaded_file.name,
-    )
-    if not store_dates:
-        st.warning(
-            f"Nothing stored: the file has only the oldest day (**{dropped}**), "
-            "which is always dropped because it has no previous day for pre-pick. "
-            "Upload at least two days."
-            if dropped is not None else "No storable days in the file."
+        store_dates, dropped = _ingest_upload(
+            df, warehouse, site_map, site, show_capacity, plan_by_date,
+            source=uploaded_file.name,
         )
-        return
-    msg = f"Stored **{len(store_dates)}** day(s) for **{warehouse}** on the NAS."
-    if dropped is not None:
-        msg += f" Oldest day **{dropped}** skipped (no previous day → incomplete pre-pick)."
-    st.success(msg)
+        if not store_dates:
+            st.warning(
+                f"Nothing stored: the file has only the oldest day (**{dropped}**), "
+                "which is always dropped because it has no previous day for pre-pick. "
+                "Upload at least two days."
+                if dropped is not None else "No storable days in the file."
+            )
+            return
+        msg = f"Stored **{len(store_dates)}** day(s) for **{warehouse}** on the NAS."
+        if dropped is not None:
+            msg += (f" Oldest day **{dropped}** skipped (no previous day → "
+                    "incomplete pre-pick).")
+        st.session_state["prio_ingested_sig"] = sig
+        st.session_state["prio_ingested_wh"] = warehouse
+        st.session_state["prio_ingested_site"] = site
+        st.success(msg)
+    else:
+        warehouse = st.session_state["prio_ingested_wh"]
+        site = st.session_state["prio_ingested_site"]
+        site_map, _ = _resolve_cap_site(warehouse, show_capacity)
 
     _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
-                       site_map, site, hourly_context_df=df)
+                       site_map, site)
