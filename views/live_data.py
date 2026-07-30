@@ -8,8 +8,6 @@ the API. A day selector narrows the 48h window to a single calendar day so the
 import io
 
 import pandas as pd
-import plotly.graph_objects as go
-import plotly.express as px
 import streamlit as st
 
 from cubeanalytics_utils import (
@@ -38,38 +36,15 @@ _ROBOT_SERIES = ["working", "available", "recovery", "unavailable",
                  "charging_available", "charging_unavailable"]
 
 
-def _line_chart(df, cols, ytitle, key, show_legend=True, decimals=1):
-    """Interactive Plotly line chart: click a legend entry to hide a series,
-    double-click to isolate it; zoom/pan/hover with `decimals`-place values."""
-    fig = go.Figure()
-    palette = px.colors.qualitative.Plotly + px.colors.qualitative.Set3
-    for i, col in enumerate(cols):
-        fig.add_trace(go.Scatter(
-            x=df["ts"], y=df[col], name=str(col), mode="lines",
-            line=dict(width=1.3, color=palette[i % len(palette)]),
-            hovertemplate=f"%{{x|%a %H:%M}}<br>{col}: %{{y:.{decimals}f}}<extra></extra>",
-        ))
-    fig.update_layout(
-        height=380, margin=dict(l=10, r=10, t=10, b=10),
-        hovermode="x unified", showlegend=show_legend,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        yaxis_title=ytitle, xaxis_title=None,
-        plot_bgcolor="white", paper_bgcolor="white",
-    )
-    fig.update_xaxes(showgrid=True, gridcolor="#f0f0f0")
-    fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
-    st.plotly_chart(fig, use_container_width=True, key=key)
+def _line_chart(df, cols, decimals=1):
+    """Native Streamlit/Altair line chart. Values are rounded to `decimals`
+    places so the hover tooltip never shows long floats."""
+    data = df.set_index("ts")[[c for c in cols if c in df.columns]].round(decimals)
+    st.line_chart(data)
 
 
-def _bar_chart(series, ytitle, key):
-    fig = go.Figure(go.Bar(x=series.index, y=series.values,
-                           marker_color="#2563eb",
-                           hovertemplate="%{x|%a %H:%M}<br>%{y:.0f}<extra></extra>"))
-    fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
-                      yaxis_title=ytitle, plot_bgcolor="white", paper_bgcolor="white")
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(showgrid=True, gridcolor="#f0f0f0")
-    st.plotly_chart(fig, use_container_width=True, key=key)
+def _bar_chart(series):
+    st.bar_chart(series.round(0))
 
 
 def _days_of(df):
@@ -121,11 +96,9 @@ def _render_jobs(inst_id, label):
     c3.metric("Peak active", int(d["active"].max()))
     c4.metric("5-min events", len(d))
     st.markdown("**Jobs in the system (5-min)**")
-    _line_chart(d, ["total", "active", "unique", "total_prepared", "unique_prepared"],
-                "Jobs", "live_jobs_c1")
+    _line_chart(d, ["total", "active", "unique", "total_prepared", "unique_prepared"])
     st.markdown("**Job flow per 5-min (created / completed / updated / deleted)**")
-    _line_chart(d, ["created", "completed", "updated", "deleted"],
-                "Jobs / 5-min", "live_jobs_c2")
+    _line_chart(d, ["created", "completed", "updated", "deleted"])
     st.markdown("**Data**")
     st.dataframe(d[["ts", *_JOB_SERIES]], use_container_width=True, hide_index=True)
     _download(d[["ts", *_JOB_SERIES]], f"{label}_jobs.csv", "dl_live_jobs_page")
@@ -148,18 +121,16 @@ def _render_robots(inst_id, label):
     c3.metric("Avg battery %", round(float(d["battery_avg"].mean()), 1)
               if d["battery_avg"].notna().any() else 0)
     st.markdown("**Robots by state — avg concurrent (5-min)**")
-    _line_chart(d, [c for c in _ROBOT_SERIES if c in d.columns],
-                "Avg concurrent robots", "live_robots_c1")
+    _line_chart(d, [c for c in _ROBOT_SERIES if c in d.columns])
     if d["battery_avg"].notna().any():
         st.markdown("**Average fleet battery % (5-min)**")
-        _line_chart(d, ["battery_avg"], "Battery %", "live_robots_batt")
+        _line_chart(d, ["battery_avg"])
     if not bat.empty:
         bd = _filter_day(bat, day)
         robot_cols = [c for c in bd.columns if c != "ts"]
         if robot_cols:
             st.markdown(f"**Battery per robot ({len(robot_cols)} robots)**")
-            _line_chart(bd, robot_cols, "Battery %", "live_robots_perbot",
-                        show_legend=len(robot_cols) <= 20)
+            _line_chart(bd, robot_cols)
     st.markdown("**Data**")
     show = ["ts", "robots", "battery_avg", *[c for c in _ROBOT_SERIES if c in d.columns]]
     st.dataframe(d[show], use_container_width=True, hide_index=True)
@@ -182,7 +153,7 @@ def _render_generic(inst_id, event_type, label):
     c1.metric("Records (day)", len(d))
     c2.metric("Distinct 5-min buckets", int((counts > 0).sum()))
     st.markdown("**Records per 5-min**")
-    _bar_chart(counts, "Records", f"live_{event_type}_bar")
+    _bar_chart(counts)
     st.markdown("**Data**")
     st.dataframe(d, use_container_width=True, hide_index=True)
     _download(d, f"{label}_{event_type.lower()}.csv", f"dl_live_{event_type}_page")
