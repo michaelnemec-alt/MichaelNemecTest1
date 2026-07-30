@@ -11,7 +11,6 @@ import re
 import threading
 import time
 import traceback
-from collections import Counter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("cube_analytics")
@@ -1982,8 +1981,17 @@ _TABLE_CSS = """
 .as-table th.as-rowhdr, .as-table td.as-rowhdr { background: #fafafa; font-weight: 600; }
 .as-table tbody tr:nth-child(even) td { background: #fcfcfd; }
 .as-table td.as-outdated { background: #fdecea !important; color: #b02a1a; font-weight: 600; }
+.as-table-tall { max-height: 72vh; overflow: auto; }
+.as-table-tall thead th { position: sticky; top: 0; z-index: 1; }
 </style>
 """
+
+_CATEGORY_SINGULAR = {
+    "Robots": "Robot",
+    "Ports": "Port",
+    "Chargers": "Charger",
+    "Access points": "Access point",
+}
 
 
 def _render_html_table(df):
@@ -2256,15 +2264,54 @@ def _view_versions(date_from_str, date_to_str):
     _render_version_table(table)
 
 
-def _rep_value(values):
-    """Representative value for a group of per-device values. Most common wins;
-    a trailing '*' marks a component reporting more than one distinct value."""
-    vals = [str(v) for v in values if v is not None and str(v) not in ("", "—")]
-    if not vals:
-        return ""
-    cnt = Counter(vals)
-    top = cnt.most_common(1)[0][0]
-    return top + (" *" if len(cnt) > 1 else "")
+def _fleet_max_by_sub(df_module):
+    """Newest fleet-wide version per sub_module (only version-looking values)."""
+    out = {}
+    for sm, grp in df_module.groupby("sub_module"):
+        keys = [
+            _version_key(v) for v in grp["value"]
+            if _VERSION_LIKE.match(str(v))
+        ]
+        keys = [k for k in keys if k]
+        if keys:
+            out[sm] = max(keys)
+    return out
+
+
+def _module_id_sort_key(v):
+    s = str(v)
+    return (0, int(s)) if s.isdigit() else (1, s)
+
+
+def _render_device_table(table, ref_max, row_label):
+    """Per-device version table (device rows x sub-module columns).
+
+    A cell is red when its version-looking value is behind the fleet-newest for
+    that sub-module (ref_max, computed across all sites). Descriptive values
+    (TYPE, GRIPPER, bin type, ...) are shown as-is without highlighting.
+    """
+    cols = list(table.columns)
+    header = "".join(f"<th>{c}</th>" for c in cols)
+    rows = []
+    for dev, row in table.iterrows():
+        cells = []
+        for c in cols:
+            val = row[c]
+            cls = ""
+            if _VERSION_LIKE.match(str(val)):
+                k = _version_key(val)
+                mx = ref_max.get(c, ())
+                if k and mx and k < mx:
+                    cls = ' class="as-outdated"'
+            cells.append(f"<td{cls}>{val}</td>")
+        rows.append(f'<tr><td class="as-rowhdr">{dev}</td>{"".join(cells)}</tr>')
+    html = (
+        f'{_TABLE_CSS}<div class="as-table-wrap as-table-tall">'
+        f'<table class="as-table">'
+        f'<thead><tr><th class="as-rowhdr">{row_label}</th>{header}</tr></thead>'
+        f'<tbody>{"".join(rows)}</tbody></table></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def _view_module_versions(date_from_str, date_to_str):
@@ -2273,11 +2320,11 @@ def _view_module_versions(date_from_str, date_to_str):
 
     _title_with_info(
         "Versions of Modules",
-        "Per-device firmware from the module-versions endpoint, grouped by "
-        "component (rows) and site (columns). Each cell is the version that "
-        "site's devices run; a trailing * means devices on that site disagree. "
-        "Version-looking cells are highlighted red when the site lags behind the "
-        "newest version any site in the fleet runs for that component.",
+        "Per-device firmware from the module-versions endpoint: one row per "
+        "device (robot / port / charger / access point) for the selected site, "
+        "columns are that device's components. Version-looking cells are "
+        "highlighted red when the device lags behind the newest version any "
+        "device in the fleet (all sites) runs for that component.",
     )
     if df.empty:
         st.warning("No module-version data returned for the selected range.")
@@ -2289,23 +2336,27 @@ def _view_module_versions(date_from_str, date_to_str):
         "Module", list(_MODULE_CATEGORIES), horizontal=True, key="modver_category"
     )
     module = _MODULE_CATEGORIES[category]
-    sub = latest[latest["module"] == module]
-    if sub.empty:
+    mod_rows = latest[latest["module"] == module]
+    if mod_rows.empty:
         st.info(f"No {category.lower()} reported for the fleet.")
         return
 
-    counts = sub.groupby("site")["module_id"].nunique()
-    st.caption(
-        "Devices per site: "
-        + ", ".join(f"{_site_code(s)} {n}" for s, n in counts.items())
+    sites = sorted(mod_rows["site"].unique(), key=_site_code)
+    site_sel = st.selectbox(
+        "Site", sites, format_func=_site_code, key="modver_site"
     )
+    sub = mod_rows[mod_rows["site"] == site_sel]
+    st.caption(f"{_site_code(site_sel)}: {sub['module_id'].nunique()} devices")
 
+    ref_max = _fleet_max_by_sub(mod_rows)
     table = sub.pivot_table(
-        index="sub_module", columns="site", values="value", aggfunc=_rep_value
+        index="module_id", columns="sub_module", values="value", aggfunc="first"
     )
-    table.columns = [_site_code(s) for s in table.columns]
+    table = table.reindex(sorted(table.index, key=_module_id_sort_key))
     table = table.fillna("—")
-    _render_version_table(table, row_label="Component")
+    label = _CATEGORY_SINGULAR[category]
+    table.index = [f"{label} {i}" for i in table.index]
+    _render_device_table(table, ref_max, row_label=label)
 
 
 def _view_bin_overview(date_from_str, date_to_str, aggregation):
