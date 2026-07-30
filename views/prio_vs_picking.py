@@ -293,38 +293,46 @@ def _maxcap_hourly(df_wait_window, quantile=0.95):
     return out
 
 
-def _robot_util_hourly(df_robot_hourly, target_date):
-    """Per-hour robot utilisation (working_s / total_s) for one day, 24 slots.
+def _theomax_flat(df_wait, target_date, df_robot_hourly, util_min=0.6, q=0.95):
+    """Flat throughput ceiling = peak per-robot productivity x workable fleet.
 
-    NaN where the hour has no robot-state data so the theoretical-max ceiling is
-    simply not drawn there rather than dividing by zero.
-    """
-    out = [float("nan")] * 24
-    if df_robot_hourly is None or df_robot_hourly.empty:
-        return out
-    d = df_robot_hourly[df_robot_hourly["date"].dt.date == target_date]
-    if d.empty:
-        return out
-    g = d.groupby("hour")[["working_s", "total_s"]].sum()
-    for h in range(24):
-        if h in g.index and g.loc[h, "total_s"] > 0:
-            out[h] = float(g.loc[h, "working_s"] / g.loc[h, "total_s"])
-    return out
-
-
-def _theomax_hourly(total_bins, util):
-    """Theoretical bin presentations/hour at 100% robot utilisation.
-
-    theomax(h) = total_bins(h) / utilisation(h): the throughput the same fleet
-    would reach if every robot worked the whole hour. 0 where utilisation is
-    unknown or zero.
+    Per-robot productivity drops off-peak because idle robots queue at ports, so
+    the ceiling is the sustainable peak: the q-quantile of hourly
+    bins / working-robots over hours busy enough (utilisation >= util_min) to
+    reflect real throughput. The fleet it scales to excludes robots kept off
+    work by charging (charging_unavailable) since batteries must recharge under
+    load; robots down for service/maintenance are NOT excluded (a facility
+    issue, not a capacity limit of the system). Returns a constant 24-slot list
+    (0 when robot-state is unavailable).
     """
     out = [0.0] * 24
-    for h in range(24):
-        u = util[h]
-        if u and u == u and u > 0:
-            out[h] = float(total_bins[h]) / u
-    return out
+    if (df_robot_hourly is None or df_robot_hourly.empty
+            or df_wait is None or df_wait.empty):
+        return out
+    w = df_wait.copy()
+    w["_d"] = w["Timestamp"].dt.date
+    w["_h"] = w["Timestamp"].dt.hour
+    bins = w.groupby(["_d", "_h"])["Count"].sum().rename("bins").reset_index()
+    r = df_robot_hourly.copy()
+    r["_d"] = r["date"].dt.date
+    cols = ["working_s", "total_s", "charging_unavailable_s"]
+    rob = r.groupby(["_d", "hour"])[cols].sum().reset_index()
+    rob = rob.rename(columns={"hour": "_h"})
+    m = bins.merge(rob, on=["_d", "_h"], how="inner")
+    m = m[(m["total_s"] > 0) & (m["working_s"] > 0)]
+    if m.empty:
+        return out
+    m["util"] = m["working_s"] / m["total_s"]
+    m["rate"] = m["bins"] / (m["working_s"] / 3600.0)
+    good = m[m["util"] >= util_min]
+    if good.empty:
+        return out
+    peak_rate = float(good["rate"].quantile(q))
+    busy = good[good["_d"] == target_date]
+    if busy.empty:
+        busy = good
+    workable = (busy["total_s"] - busy["charging_unavailable_s"]) / 3600.0
+    return [peak_rate * float(workable.median())] * 24
 
 
 def _capacity_arrays(df_wait_day, target_date, df_wait_window=None,
@@ -336,14 +344,13 @@ def _capacity_arrays(df_wait_day, target_date, df_wait_window=None,
     df_wait_window  : the look-back window ending at target_date, used only for
                       the 95th-percentile peak envelope. This is what gets frozen
                       so the envelope reflects the window as of that day.
-    df_robot_hourly : hourly robot-state for target_date, used to scale actual
-                      throughput to a 100%-robot-utilisation ceiling (theomax).
+    df_robot_hourly : hourly robot-state, used for the flat throughput ceiling
+                      (peak per-robot productivity x fleet size).
     """
     _, bin_time, user_time, bins = _capacity_hourly(df_wait_day, target_date)
     total_bins = _bin_presentations_hourly(df_wait_day, target_date)
     maxcap = _maxcap_hourly(df_wait_window) if df_wait_window is not None else [0.0] * 24
-    util = _robot_util_hourly(df_robot_hourly, target_date)
-    theomax = _theomax_hourly(total_bins, util)
+    theomax = _theomax_flat(df_wait_day, target_date, df_robot_hourly)
     return {
         "bin_time": bin_time,
         "user_time": user_time,
@@ -521,7 +528,7 @@ def _overlay_capacity(ax, cap, base_date):
     if theomax is not None and any(theomax):
         tm = [v if v else float("nan") for v in theomax]
         ax_bins.plot(x_num, tm, color="#7d3cc7", linewidth=1.8, linestyle="--",
-                     label="Theoretical max / hour (@100% robot util)")
+                     label="Theoretical max / hour (peak productivity x fleet less charging)")
     ax_bins.plot(x_num, bins, color="#111111", linewidth=2, marker="o",
                  markersize=3.5, label="Bins picked / hour (cat 1+2)")
     ax_bins.set_ylim(*_aligned_ylim(bins_top))

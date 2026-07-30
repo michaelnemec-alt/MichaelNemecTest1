@@ -478,8 +478,10 @@ def query_robot_state_hourly(installation_id, date_from_str, date_to_str):
     Keeps the hourly resolution the robot-state endpoint reports (keys like
     '08:00:00'), summing seconds across all robots present that hour:
       working_s = time robots spent working, total_s = total robot time,
-      utilization = working_s / total_s. total_s / 3600 is the robot count.
-    Used to scale actual throughput to a 100%-robot-utilisation ceiling.
+      charging_unavailable_s = time robots were charging and unable to work
+      (the uncontrollable battery constraint), utilization = working_s / total_s.
+    total_s / 3600 is the robot count; charging_unavailable_s / 3600 is the
+    robots kept off work by charging. Used to build the throughput ceiling.
     """
     url = f"{BASE_URL}/installations/{installation_id}/robot-state/"
     params = {"after": date_from_str, "before": date_to_str}
@@ -500,6 +502,9 @@ def query_robot_state_hourly(installation_id, date_from_str, date_to_str):
                 continue
             working_s = sum(r.get("working", 0) or 0 for r in hour_robots)
             total_s = sum(r.get("total_time_s", 0) or 0 for r in hour_robots)
+            charging_unavailable_s = sum(
+                r.get("charging_unavailable", 0) or 0 for r in hour_robots
+            )
             if total_s == 0:
                 continue
             rows.append({
@@ -507,11 +512,15 @@ def query_robot_state_hourly(installation_id, date_from_str, date_to_str):
                 "hour": hour,
                 "working_s": working_s,
                 "total_s": total_s,
+                "charging_unavailable_s": charging_unavailable_s,
                 "n_robots": len(hour_robots),
             })
 
     if not rows:
-        return pd.DataFrame(columns=["date", "hour", "working_s", "total_s", "n_robots"])
+        return pd.DataFrame(columns=[
+            "date", "hour", "working_s", "total_s",
+            "charging_unavailable_s", "n_robots",
+        ])
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
