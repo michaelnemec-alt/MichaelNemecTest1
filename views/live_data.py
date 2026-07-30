@@ -87,6 +87,38 @@ def _bar_chart(series):
     st.bar_chart(series.round(0))
 
 
+def _stacked_bar_chart(df, cols, decimals=1):
+    """Stacked column chart over a 24h local-time x-axis (5-min buckets). The
+    stack order follows `cols`; tz-naive timestamps render literally (no
+    browser-timezone shift)."""
+    cols = [c for c in cols if c in df.columns]
+    data = df[["ts"] + cols].copy()
+    data[cols] = data[cols].round(decimals)
+    long = data.melt("ts", var_name="series", value_name="value")
+    order = {c: i for i, c in enumerate(cols)}
+    long["order"] = long["series"].map(order)
+    chart = (
+        alt.Chart(long)
+        .mark_bar()
+        .encode(
+            x=alt.X("ts:T", title=None,
+                    axis=alt.Axis(format="%H:%M", labelOverlap=True)),
+            y=alt.Y("value:Q", title=None, stack=True),
+            color=alt.Color("series:N", title=None,
+                            sort=cols, scale=alt.Scale(domain=cols)),
+            order=alt.Order("order:Q", sort="ascending"),
+            tooltip=[
+                alt.Tooltip("ts:T", title="time", format="%Y-%m-%d %H:%M"),
+                alt.Tooltip("series:N", title="series"),
+                alt.Tooltip("value:Q", title="value"),
+            ],
+        )
+        .properties(height=300)
+        .configure_axisX(labelAngle=0)
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+
 def _days_of(df):
     if df.empty or "ts" not in df.columns:
         return []
@@ -161,7 +193,7 @@ def _render_robots(inst_id, label):
     c3.metric("Avg battery %", round(float(d["battery_avg"].mean()), 1)
               if d["battery_avg"].notna().any() else 0)
     st.markdown("**Robots by state — avg concurrent (5-min)**")
-    _line_chart(d, [c for c in _ROBOT_SERIES if c in d.columns])
+    _stacked_bar_chart(d, [c for c in _ROBOT_SERIES if c in d.columns])
     if d["battery_avg"].notna().any():
         st.markdown("**Average fleet battery % (5-min)**")
         _line_chart(d, ["battery_avg"])
