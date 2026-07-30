@@ -65,6 +65,28 @@ directly to the public internet. Instead:
   `http://<nas-tailscale-name>:8501` from any of your devices. Simplest + secure.
 - or **QNAP QVPN** (WireGuard/OpenVPN) and connect to the home network first.
 
+## Raw live-event collector (optional but recommended)
+
+`docker compose up` also starts a second container, **`autostore-collector`**,
+that keeps a WebSocket open to CubeAnalytics and writes every event verbatim to
+an append-only NDJSON store — so we build our own history beyond the REST 48h
+window and can recompute any chart later from untouched source data.
+
+- Layout: `<data>/<installation_id>/<EVENT_TYPE>/<YYYY-MM-DD>.ndjson`, one event
+  per line, deduplicated by event `uuid` (WebSocket + REST backfill overlap
+  freely). It captures the WebSocket-only events too (`CHARGER_STATE`, `STATUS`).
+- On start-up it backfills the last `COLLECTOR_BACKFILL_HOURS` (default 48) from
+  REST so a restart doesn't leave a gap.
+- Storage defaults to the `autostore-raw` Docker volume. **To browse the files
+  directly on the NAS**, change the collector's volume in `docker-compose.yml`
+  to a bind mount, e.g. `- /share/Container/autostore-raw:/data`.
+- One WebSocket connection per API token: don't run a second collector with the
+  same token, or they will disconnect each other. The app itself uses REST only,
+  so it does not conflict.
+- Optional env (in `.env`): `COLLECTOR_INSTALLATIONS` (comma-separated ids to
+  limit collection; default all), `COLLECTOR_BACKFILL_HOURS`.
+- Logs: `docker compose logs -f collector`.
+
 ## Health & troubleshooting
 
 - Container has a healthcheck hitting `/_stcore/health`; Container Station shows

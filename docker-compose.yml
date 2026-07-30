@@ -22,5 +22,27 @@ services:
       - autostore-cache:/root/.streamlit
     mem_limit: 3g
 
+  # Raw live-event collector: streams the WebSocket and backfills the REST
+  # window into an append-only NDJSON store. Reuses the app image but runs the
+  # collector module instead of Streamlit.
+  collector:
+    build: .
+    image: autostore-analytics:latest
+    container_name: autostore-collector
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "collector.collect"]
+    environment:
+      CUBEANALYTICS_TOKEN: ${CUBEANALYTICS_TOKEN:?set CUBEANALYTICS_TOKEN in .env}
+      COLLECTOR_DATA_ROOT: /data
+      # Optional: comma-separated installation ids (default: all the token sees).
+      COLLECTOR_INSTALLATIONS: ${COLLECTOR_INSTALLATIONS:-}
+      COLLECTOR_BACKFILL_HOURS: ${COLLECTOR_BACKFILL_HOURS:-48}
+    volumes:
+      # Raw NDJSON store. Swap for a bind mount (e.g. /share/Container/autostore-raw:/data)
+      # to browse the files directly on the NAS.
+      - autostore-raw:/data
+    mem_limit: 512m
+
 volumes:
   autostore-cache:
+  autostore-raw:
