@@ -7,12 +7,13 @@ import io
 import re
 from datetime import date, timedelta
 
+import picking_store
 from snowflake_utils import is_snowflake_configured, get_available_warehouses, query_picking_data
 from cubeanalytics_utils import is_api_configured, get_installations, query_port_wait_time
 
 
-def _generate_chart(data, autostore_num, warehouse_name, full_data=None,
-                    target_date=None, plan_planned=None, ax=None):
+def _generate_chart(data, autostore_num, warehouse_name, hourly_overlay=None,
+                    plan_planned=None, ax=None):
     own_fig = ax is None
     if own_fig:
         fig, ax = plt.subplots(figsize=(24, 10), dpi=150)
@@ -67,20 +68,14 @@ def _generate_chart(data, autostore_num, warehouse_name, full_data=None,
     ax.grid(which="minor", axis="y", alpha=0.2, color="#cccccc", linestyle="--")
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
 
-    if full_data is not None and target_date is not None:
+    if hourly_overlay is not None:
         ax2 = ax.twinx()
         base_date = data["Finished Picking At"].dt.normalize().iloc[0]
         hours = list(range(0, 24))
         x_times = [base_date + pd.Timedelta(hours=h) for h in hours]
 
-        all_target = full_data[full_data["Prioritization Time"].dt.date == target_date]
-        prepicked = all_target[all_target["Finished Picking At"].dt.date < target_date]
-        prepick_counts = prepicked.groupby("prio_hour").size()
-        sameday_target = all_target[all_target["Finished Picking At"].dt.date == target_date]
-        sameday_counts = sameday_target.groupby("prio_hour").size()
-
-        prepick_vals = np.array([prepick_counts.get(h, 0) for h in hours], dtype=float)
-        sameday_vals = np.array([sameday_counts.get(h, 0) for h in hours], dtype=float)
+        prepick_vals = np.array(hourly_overlay.get("prepick", [0] * 24), dtype=float)
+        sameday_vals = np.array(hourly_overlay.get("sameday", [0] * 24), dtype=float)
         total_vals = prepick_vals + sameday_vals
 
         if plan_planned is not None:
@@ -129,6 +124,26 @@ def _compute_stats(data):
         "Late %": round(late / len(same_day) * 100, 1) if len(same_day) > 0 else 0,
         "Median same-day (min)": round(same_day["diff_minutes"].median(), 1) if len(same_day) > 0 else 0,
         "Mean same-day (min)": round(same_day["diff_minutes"].mean(), 1) if len(same_day) > 0 else 0,
+    }
+
+
+def _compute_overlay(full_df, target_date):
+    """Hourly pre-pick / same-day counts (by prioritization hour) for a target day.
+
+    prepick = orders prioritized on target_date but finished picking earlier
+    (needs the previous day's rows, hence computed from the full uploaded file);
+    sameday = prioritized and finished on target_date. Returned as two 24-slot
+    lists so it can be frozen to disk and redrawn without the source rows.
+    """
+    hours = list(range(24))
+    all_target = full_df[full_df["Prioritization Time"].dt.date == target_date]
+    prepicked = all_target[all_target["Finished Picking At"].dt.date < target_date]
+    sameday = all_target[all_target["Finished Picking At"].dt.date == target_date]
+    pc = prepicked.groupby("prio_hour").size()
+    sc = sameday.groupby("prio_hour").size()
+    return {
+        "prepick": [int(pc.get(h, 0)) for h in hours],
+        "sameday": [int(sc.get(h, 0)) for h in hours],
     }
 
 
@@ -273,6 +288,27 @@ def _maxcap_hourly(df_wait_window, quantile=0.95):
     return out
 
 
+def _capacity_arrays(df_wait_day, target_date, df_wait_window=None):
+    """Bundle every hourly capacity series for one day into 24-slot lists.
+
+    df_wait_day    : single-day (or wider) port-wait data; bin/user time and
+                     total bin presentations are read from the target_date slice.
+    df_wait_window : the look-back window ending at target_date, used only for
+                     the 95th-percentile peak envelope. This is what gets frozen
+                     so the envelope reflects the window as of that day.
+    """
+    _, bin_time, user_time, bins = _capacity_hourly(df_wait_day, target_date)
+    total_bins = _bin_presentations_hourly(df_wait_day, target_date)
+    maxcap = _maxcap_hourly(df_wait_window) if df_wait_window is not None else [0.0] * 24
+    return {
+        "bin_time": bin_time,
+        "user_time": user_time,
+        "bins": bins,
+        "total_bins": total_bins,
+        "maxcap": maxcap,
+    }
+
+
 def _capacity_chart(df_wait, autostore_num, warehouse_name, target_date, site_name, ax=None):
     """Combo chart mirroring 'AS Max capacity utilization':
 
@@ -363,15 +399,24 @@ def _load_maxcap_df(autostore_num, site_map, selected_site, target_date, months=
             return None
 
 
-def _overlay_capacity(ax, df_wait, base_date, target_date, total_bins=None, maxcap=None):
+def _overlay_capacity(ax, cap, base_date):
     """Overlay hourly capacity data onto the scatter axes on their own y-axes.
+
+    `cap` is the precomputed arrays dict from _capacity_arrays (bin_time,
+    user_time, bins, total_bins, maxcap), so the same drawing code serves both
+    the live path and the frozen-on-disk history path.
 
     Bin wait / operator handling times (bars, seconds) sit behind the scatter on
     a right-hand seconds axis; bins picked/hour is a line on a further-right axis.
     The same bins axis also carries the grey total bin-presentations/hour line and
-    the red 4-month peak envelope.
+    the red peak envelope.
     """
-    hours, bin_time, user_time, bins = _capacity_hourly(df_wait, target_date)
+    hours = list(range(24))
+    bin_time = cap.get("bin_time", [0.0] * 24)
+    user_time = cap.get("user_time", [0.0] * 24)
+    bins = cap.get("bins", [0.0] * 24)
+    total_bins = cap.get("total_bins")
+    maxcap = cap.get("maxcap")
     x_num = mdates.date2num([base_date + pd.Timedelta(hours=h) for h in hours])
     w = 0.34 / 24.0
 
@@ -406,7 +451,7 @@ def _overlay_capacity(ax, df_wait, base_date, target_date, total_bins=None, maxc
     ax_bins.spines["right"].set_position(("axes", 1.11))
     if maxcap is not None and any(maxcap):
         ax_bins.plot(x_num, maxcap, color="#d0342c", linewidth=1.8,
-                     label="Peak bin presentations / hour (95th pct, last 2 months)")
+                     label="Peak bin presentations / hour (95th pct, ~2 months to date)")
     if total_bins is not None and any(total_bins):
         ax_bins.plot(x_num, total_bins, color="#9aa0a6", linewidth=1.8,
                      label="Bin presentations / hour (total)")
@@ -420,18 +465,19 @@ def _overlay_capacity(ax, df_wait, base_date, target_date, total_bins=None, maxc
     ax_sec.legend(h1 + h2, l1 + l2, loc="lower left", fontsize=11, framealpha=0.9)
 
 
-def _combined_chart(scatter_data, df_wait, autostore_num, warehouse, full_data,
-                    target_date, plan_planned, site_name, df_wait_window=None):
-    """Prio-vs-Picking scatter with hourly capacity data overlaid in one chart."""
+def _combined_chart(scatter_data, cap, autostore_num, warehouse, hourly_overlay,
+                    target_date, plan_planned, site_name):
+    """Prio-vs-Picking scatter with hourly capacity data overlaid in one chart.
+
+    `cap` is the precomputed capacity arrays dict; `hourly_overlay` the frozen
+    pre-pick / same-day counts.
+    """
     fig, ax = plt.subplots(figsize=(26, 11), dpi=150)
     fig.patch.set_facecolor("white")
-    _generate_chart(scatter_data, autostore_num, warehouse, full_data=full_data,
-                    target_date=target_date, plan_planned=plan_planned, ax=ax)
+    _generate_chart(scatter_data, autostore_num, warehouse,
+                    hourly_overlay=hourly_overlay, plan_planned=plan_planned, ax=ax)
     base_date = scatter_data["Finished Picking At"].dt.normalize().iloc[0]
-    total_bins = _bin_presentations_hourly(df_wait, target_date)
-    maxcap = _maxcap_hourly(df_wait_window) if df_wait_window is not None else None
-    _overlay_capacity(ax, df_wait, base_date, target_date,
-                      total_bins=total_bins, maxcap=maxcap)
+    _overlay_capacity(ax, cap, base_date)
     ax.set_title(
         f"Prio vs Picking + capacity — AutoStore {autostore_num} "
         f"({_AS_ENV.get(autostore_num, '')})\n{site_name} | {target_date}",
@@ -439,6 +485,290 @@ def _combined_chart(scatter_data, df_wait, autostore_num, warehouse, full_data,
     )
     fig.subplots_adjust(right=0.86)
     return fig
+
+
+def _parse_df(df_raw):
+    """Filter to STANDARD/EXPRESS and add the derived columns the charts use."""
+    df = df_raw[df_raw["Type"].isin(["STANDARD", "EXPRESS"])].copy()
+    df["Prioritization Time"] = pd.to_datetime(df["Prioritization Time"], errors="coerce")
+    df["Finished Picking At"] = pd.to_datetime(df["Finished Picking At"], errors="coerce")
+    df = df.dropna(subset=["Prioritization Time", "Finished Picking At"])
+    df["diff_minutes"] = (
+        (df["Prioritization Time"] - df["Finished Picking At"]).dt.total_seconds() / 60
+    )
+    df["is_next_day"] = df["Prioritization Time"].dt.date > df["Finished Picking At"].dt.date
+    df["prio_hour"] = df["Prioritization Time"].dt.hour
+    return df
+
+
+def _warehouse_of(df):
+    parts = df["AutoStore"].iloc[0].split(".")
+    return f"{parts[0]}.{parts[1]}" if len(parts) >= 2 else "unknown"
+
+
+def _parse_plan(plan_file):
+    """Parse an optional plan CSV into {date: {hour: planned_orders}}."""
+    out = {}
+    if plan_file is None:
+        return out
+    try:
+        plan_raw = pd.read_csv(plan_file, sep=";")
+        plan_raw["parsed_date"] = pd.to_datetime(
+            plan_raw["Date"].str.extract(r"(\w+ \w+ \d+ \d+)")[0], format="%a %b %d %Y"
+        )
+        for _, row in plan_raw.iterrows():
+            d = row["parsed_date"]
+            if pd.isna(d):
+                continue
+            planned = {}
+            for h in range(24):
+                col = f"order-planned-{h}"
+                if col in row.index and pd.notna(row[col]) and str(row[col]).strip():
+                    planned[h] = float(str(row[col]).replace(",", ""))
+                else:
+                    planned[h] = 0.0
+            out[d.date()] = planned
+    except Exception:
+        pass
+    return out
+
+
+def _resolve_cap_site(warehouse, show_capacity):
+    """Resolve the CubeAnalytics site for a warehouse; returns (site_map, site).
+
+    site is None when the API is off, no installations are visible, or the
+    warehouse has no CubeAnalytics installation (e.g. PRG3, FRA).
+    """
+    if not show_capacity or not is_api_configured():
+        if show_capacity and not is_api_configured():
+            st.info("CubeAnalytics API not configured — hourly capacity chart unavailable.")
+        return {}, None
+    site_map = _installation_site_map()
+    if not site_map:
+        return site_map, None
+    default_site = _default_capacity_site(site_map, warehouse)
+    if default_site is None:
+        st.info(
+            f"CubeAnalytics nemá instalaci pro sklad **{warehouse}** "
+            "(např. PRG3/Chrášťany, FRA/Bischofsheim) — hodinová capacity data "
+            "(bin presentations, peak) se nevykreslí."
+        )
+        return site_map, None
+    site_options = sorted(site_map.keys())
+    site = st.selectbox(
+        "CubeAnalytics site for capacity chart",
+        options=site_options,
+        index=site_options.index(default_site),
+        key="prio_cap_site",
+        help="Which CubeAnalytics installation the hourly Bin/User time and "
+             "bins-picked-per-hour data is read from.",
+    )
+    return site_map, site
+
+
+def _capacity_for_day(site_map, site, target_date, big_by_as=None):
+    """Compute the frozen capacity arrays per AutoStore for one day, or None.
+
+    big_by_as (optional) supplies a pre-fetched wider window per AS so an ingest
+    of many days issues one API query instead of one per day; when absent it
+    falls back to per-day queries (used by the live/recalculate paths).
+    """
+    out = {}
+    for num in (91, 92):
+        if big_by_as is not None:
+            bw = big_by_as.get(num)
+            if bw is None or bw.empty:
+                continue
+            window = bw[
+                (bw["Timestamp"].dt.date > target_date - timedelta(days=60))
+                & (bw["Timestamp"].dt.date <= target_date)
+            ]
+            out[str(num)] = _capacity_arrays(bw, target_date, window)
+        else:
+            df_wait = _load_wait_df(num, site_map, site, target_date)
+            if df_wait is None:
+                continue
+            df_win = _load_maxcap_df(num, site_map, site, target_date)
+            out[str(num)] = _capacity_arrays(df_wait, target_date, df_win)
+    return out or None
+
+
+def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, source):
+    """Store every day in the uploaded file except the oldest.
+
+    The oldest day is dropped because its pre-pick (orders finished the previous
+    day) isn't in the file, so its overlay would be incomplete. Frozen capacity
+    is computed only for days that don't already have it.
+    """
+    dates = sorted(df["Finished Picking At"].dt.date.unique())
+    dropped = dates[0] if dates else None
+    store_dates = dates[1:]
+
+    big_by_as = None
+    need_cap = show_capacity and site
+    to_freeze = [d for d in store_dates if not picking_store.has_capacity(warehouse, d)]
+    if need_cap and to_freeze:
+        span_start = min(to_freeze) - timedelta(days=60)
+        span_end = max(to_freeze) + timedelta(days=1)
+        big_by_as = {}
+        for num in (91, 92):
+            env = _AS_ENV.get(num)
+            inst = site_map.get(site, {}).get(env)
+            if not inst:
+                continue
+            with st.spinner(f"Loading capacity window (AS{num})..."):
+                try:
+                    big_by_as[num] = query_port_wait_time(inst, str(span_start), str(span_end))
+                except Exception as e:
+                    st.warning(f"Peak-capacity query failed (AS{num}): {e}")
+
+    prog = st.progress(0.0, text="Storing days...")
+    for i, d in enumerate(store_dates):
+        df_day = df[df["Finished Picking At"].dt.date == d]
+        overlay = {
+            str(num): _compute_overlay(
+                df[df["AutoStore"].str.contains(f".{num}", regex=False)], d
+            )
+            for num in (91, 92)
+        }
+        capacity = None
+        if need_cap and d in to_freeze:
+            capacity = _capacity_for_day(site_map, site, d, big_by_as=big_by_as)
+        picking_store.save_day(
+            warehouse, d, df_day, overlay, capacity=capacity,
+            plan=plan_by_date.get(d), source=source, site=site,
+            keep_existing_capacity=True,
+        )
+        prog.progress((i + 1) / len(store_dates), text=f"Stored {d}")
+    prog.empty()
+    return store_dates, dropped
+
+
+def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df):
+    """Render the metrics, per-AutoStore charts, comparison and hourly chart."""
+    df_day = view["df"]
+    target_date = view["date"]
+    warehouse = view["warehouse"]
+    overlay = view.get("overlay") or {}
+    capacity = view.get("capacity") or {}
+    plan = view.get("plan")
+    site = view.get("site") or warehouse
+
+    df_91_scatter = df_day[df_day["AutoStore"].str.contains(".91", regex=False)].copy()
+    df_92_scatter = df_day[df_day["AutoStore"].str.contains(".92", regex=False)].copy()
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Warehouse", warehouse)
+    col2.metric("Date", str(target_date))
+    col3.metric("AutoStore 91", f"{len(df_91_scatter):,}")
+    col4.metric("AutoStore 92", f"{len(df_92_scatter):,}")
+    st.divider()
+
+    stats = {}
+    for num, scatter in ((91, df_91_scatter), (92, df_92_scatter)):
+        if num == 92:
+            st.divider()
+        st.markdown(f"#### AutoStore {num}")
+        s = _compute_stats(scatter)
+        stats[num] = s
+        if not s:
+            st.warning(f"No data for AutoStore {num}")
+            continue
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1.metric("Total", f"{s['Total']:,}")
+        c2.metric("Same-day", f"{s['Same-day']:,}")
+        c3.metric("Next-day", f"{s['Next-day']:,}")
+        c4.metric("On Time", f"{s['On Time %']}%")
+        c5.metric("Late", f"{s['Late %']}%")
+        c6.metric("Median", f"{s['Median same-day (min)']} min")
+
+        ov = overlay.get(str(num))
+        cap = capacity.get(str(num))
+        if cap:
+            fig = _combined_chart(scatter, cap, num, warehouse, ov,
+                                  target_date, plan, site)
+        else:
+            fig = _generate_chart(scatter, num, warehouse,
+                                  hourly_overlay=ov, plan_planned=plan)
+        st.pyplot(fig)
+        st.download_button(f"Download PNG — AS{num}", data=_fig_to_bytes(fig),
+                           file_name=f"prio_vs_picking_{warehouse}_as{num}.png",
+                           mime="image/png", key=f"dl_{num}")
+        plt.close(fig)
+
+    if show_comparison and stats.get(91) and stats.get(92):
+        st.divider()
+        st.markdown("#### AS91 vs AS92 Comparison")
+        comp = pd.DataFrame({"AutoStore 91": stats[91], "AutoStore 92": stats[92]}).T
+        st.dataframe(comp, use_container_width=True)
+
+    if show_hourly:
+        _draw_hourly_distribution(hourly_context_df, warehouse)
+
+
+def _draw_hourly_distribution(df, warehouse):
+    st.divider()
+    st.markdown("#### Hourly Pick Task Distribution")
+    df = df.copy()
+    df["hour"] = df["Finished Picking At"].dt.hour
+    hourly = (
+        df.groupby(["hour", df["AutoStore"].str.extract(r"\.(\d{2})", expand=False)])
+        .size().unstack(fill_value=0)
+    )
+    hourly.columns = [f"AS{c}" for c in hourly.columns]
+
+    fig_h, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 6))
+    hourly.plot(kind="bar", ax=ax1, color=["#1f77b4", "#ff7f0e"])
+    ax1.set_title(f"Pick Tasks per Hour — {warehouse}", fontsize=14, fontweight="bold")
+    ax1.set_xlabel("Hour")
+    ax1.set_ylabel("Count")
+    ax1.grid(axis="y", alpha=0.3)
+
+    hourly_pct = hourly.div(hourly.sum(axis=1), axis=0) * 100
+    hourly_pct.plot(kind="bar", stacked=True, ax=ax2, color=["#1f77b4", "#ff7f0e"])
+    ax2.set_title(f"AutoStore Share per Hour — {warehouse}", fontsize=14, fontweight="bold")
+    ax2.set_xlabel("Hour")
+    ax2.set_ylabel("Share (%)")
+    ax2.set_ylim(0, 100)
+    ax2.grid(axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    st.pyplot(fig_h)
+    st.download_button("Download PNG — Hourly", data=_fig_to_bytes(fig_h),
+                       file_name=f"hourly_{warehouse}.png", mime="image/png", key="dl_hourly")
+    plt.close(fig_h)
+
+
+def _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
+                       site_map, site, hourly_context_df=None):
+    """Date-pick and render one stored day; offer to recalculate today's peak."""
+    dates = picking_store.list_dates(warehouse)
+    if not dates:
+        st.info("No stored days for this warehouse yet.")
+        return
+    target_date = st.selectbox("Select target date", options=dates,
+                               index=len(dates) - 1, key="prio_target_date")
+
+    if site and target_date == date.today():
+        if st.button("Recalculate today's peak", key="prio_recalc",
+                     help="Re-pull CubeAnalytics and overwrite only today's frozen "
+                          "capacity/peak with the current look-back window."):
+            day = picking_store.load_day(warehouse, target_date)
+            cap = _capacity_for_day(site_map, site, target_date)
+            picking_store.save_day(
+                warehouse, target_date, day["df"], day["overlay"],
+                capacity=cap, plan=day["plan"], site=site,
+                keep_existing_capacity=False,
+            )
+            st.rerun()
+
+    view = picking_store.load_day(warehouse, target_date)
+    if view is None:
+        st.warning("Stored day could not be loaded.")
+        return
+    view["site"] = site or view.get("site")
+    ctx = hourly_context_df if hourly_context_df is not None else view["df"]
+    _draw_day_view(view, show_comparison, show_hourly, ctx)
 
 
 def render():
@@ -450,14 +780,18 @@ def render():
         unsafe_allow_html=True,
     )
 
+    store_whs = picking_store.list_warehouses()
+
     with st.sidebar:
         st.markdown("#### Prio vs Picking")
+        sources = ["CSV Upload"]
+        if store_whs:
+            sources.append("Saved history")
         if sf_available:
-            data_source = st.radio("Data source", ["CSV Upload", "Snowflake"], index=0, key="prio_ds")
-        else:
-            data_source = "CSV Upload"
+            sources.append("Snowflake")
+        data_source = st.radio("Data source", sources, index=0, key="prio_ds")
 
-        uploaded_file = None
+        uploaded_file = plan_file = hist_wh = None
         sf_warehouse = sf_date_from = sf_date_to = None
 
         if data_source == "Snowflake":
@@ -468,12 +802,19 @@ def render():
                 sf_date_from = st.date_input("From", value=date.today() - timedelta(days=2), key="prio_from")
             with col_t:
                 sf_date_to = st.date_input("To", value=date.today() - timedelta(days=1), key="prio_to")
+        elif data_source == "Saved history":
+            hist_wh = st.selectbox("Warehouse (stored)", store_whs, key="prio_hist_wh")
+            st.caption("Browsing previously uploaded days from the NAS store.")
         else:
             uploaded_file = st.file_uploader("Upload picking export CSV", type=["csv"],
-                                             help="Semicolon-delimited (;) CSV", key="prio_csv")
+                                             help="Semicolon-delimited (;) CSV. Days are "
+                                                  "stored on the NAS so history stays "
+                                                  "browsable without re-uploading.",
+                                             key="prio_csv")
 
-        plan_file = st.file_uploader("Upload plan file (optional)", type=["csv"],
-                                      help="Semicolon-delimited (;) plan file", key="prio_plan")
+        if data_source in ("CSV Upload", "Snowflake"):
+            plan_file = st.file_uploader("Upload plan file (optional)", type=["csv"],
+                                          help="Semicolon-delimited (;) plan file", key="prio_plan")
         st.divider()
         show_comparison = st.checkbox("Show AS91 vs AS92 comparison", value=True, key="prio_comp")
         show_hourly = st.checkbox("Show hourly distribution", value=True, key="prio_hourly")
@@ -486,202 +827,96 @@ def render():
                  "using the same CubeAnalytics source as UNIFY Pivot Ready.",
         )
 
-    df_raw = None
+    if data_source == "Saved history":
+        site_map, site = _resolve_cap_site(hist_wh, show_capacity)
+        _render_from_store(hist_wh, show_comparison, show_hourly, show_capacity,
+                           site_map, site)
+        return
+
     if data_source == "Snowflake":
-        if sf_warehouse and sf_date_from and sf_date_to:
-            with st.spinner("Loading from Snowflake..."):
-                try:
-                    df_raw = query_picking_data(sf_warehouse, str(sf_date_from), str(sf_date_to))
-                except Exception as e:
-                    st.error(f"Snowflake query failed: {e}")
-                    return
-            if df_raw.empty:
-                st.warning("No data found.")
-                return
-        else:
+        if not (sf_warehouse and sf_date_from and sf_date_to):
             st.info("Select warehouse and date range in the sidebar.")
             return
-    else:
-        if uploaded_file is None:
-            st.info("Upload a CSV file in the sidebar to get started.")
+        with st.spinner("Loading from Snowflake..."):
+            try:
+                df_raw = query_picking_data(sf_warehouse, str(sf_date_from), str(sf_date_to))
+            except Exception as e:
+                st.error(f"Snowflake query failed: {e}")
+                return
+        if df_raw.empty:
+            st.warning("No data found.")
             return
-        try:
-            df_raw = pd.read_csv(uploaded_file, sep=";")
-        except Exception as e:
-            st.error(f"Error reading CSV: {e}")
+        required = ["AutoStore", "Type", "Prioritization Time", "Finished Picking At"]
+        missing = [c for c in required if c not in df_raw.columns]
+        if missing:
+            st.error(f"Missing columns: **{missing}**")
             return
+        df = _parse_df(df_raw)
+        warehouse = _warehouse_of(df)
+        dates = sorted(df["Finished Picking At"].dt.date.unique())
+        target_date = (st.selectbox("Select target date", options=dates,
+                                    index=len(dates) - 1, key="prio_target_date")
+                       if len(dates) > 1 else dates[0])
+        site_map, site = _resolve_cap_site(warehouse, show_capacity)
+        plan_by_date = _parse_plan(plan_file)
+        capacity = _capacity_for_day(site_map, site, target_date) if (show_capacity and site) else None
+        overlay = {
+            str(num): _compute_overlay(
+                df[df["AutoStore"].str.contains(f".{num}", regex=False)], target_date
+            )
+            for num in (91, 92)
+        }
+        view = {
+            "warehouse": warehouse, "date": target_date,
+            "df": df[df["Finished Picking At"].dt.date == target_date].copy(),
+            "overlay": overlay, "capacity": capacity,
+            "plan": plan_by_date.get(target_date), "site": site,
+        }
+        _draw_day_view(view, show_comparison, show_hourly, df)
+        return
 
+    # CSV Upload
+    if uploaded_file is None:
+        st.info("Upload a CSV file in the sidebar to get started.")
+        if store_whs:
+            st.caption("Tip: switch the data source to **Saved history** to browse "
+                       "previously uploaded days.")
+        return
+    try:
+        df_raw = pd.read_csv(uploaded_file, sep=";")
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}")
+        return
     required = ["AutoStore", "Type", "Prioritization Time", "Finished Picking At"]
     missing = [c for c in required if c not in df_raw.columns]
     if missing:
         st.error(f"Missing columns: **{missing}**")
         return
 
-    df = df_raw[df_raw["Type"].isin(["STANDARD", "EXPRESS"])].copy()
-    df["Prioritization Time"] = pd.to_datetime(df["Prioritization Time"], errors="coerce")
-    df["Finished Picking At"] = pd.to_datetime(df["Finished Picking At"], errors="coerce")
-    df = df.dropna(subset=["Prioritization Time", "Finished Picking At"])
-    df["diff_minutes"] = (df["Prioritization Time"] - df["Finished Picking At"]).dt.total_seconds() / 60
-    df["is_next_day"] = df["Prioritization Time"].dt.date > df["Finished Picking At"].dt.date
-    df["prio_hour"] = df["Prioritization Time"].dt.hour
+    df = _parse_df(df_raw)
+    if df.empty:
+        st.warning("No STANDARD/EXPRESS rows with valid timestamps in the file.")
+        return
+    warehouse = _warehouse_of(df)
+    site_map, site = _resolve_cap_site(warehouse, show_capacity)
+    plan_by_date = _parse_plan(plan_file)
 
-    df_91 = df[df["AutoStore"].str.contains(".91", regex=False)].copy()
-    df_92 = df[df["AutoStore"].str.contains(".92", regex=False)].copy()
-    parts = df["AutoStore"].iloc[0].split(".")
-    warehouse = f"{parts[0]}.{parts[1]}" if len(parts) >= 2 else "unknown"
-
-    available_dates = sorted(df["Finished Picking At"].dt.date.unique())
-    if len(available_dates) > 1:
-        target_date = st.selectbox("Select target date", options=available_dates,
-                                    index=len(available_dates) - 1, key="prio_target_date")
-    else:
-        target_date = available_dates[0]
-
-    df_91_scatter = df_91[df_91["Finished Picking At"].dt.date == target_date].copy()
-    df_92_scatter = df_92[df_92["Finished Picking At"].dt.date == target_date].copy()
-
-    cap_site_map = {}
-    cap_site = None
-    if show_capacity:
-        if not is_api_configured():
-            st.info("CubeAnalytics API not configured — hourly capacity chart unavailable.")
-        else:
-            cap_site_map = _installation_site_map()
-            default_site = _default_capacity_site(cap_site_map, warehouse)
-            if not cap_site_map:
-                pass
-            elif default_site is None:
-                st.info(
-                    f"CubeAnalytics nemá instalaci pro sklad **{warehouse}** "
-                    "(např. PRG3/Chrášťany, FRA/Bischofsheim) — hodinová capacity "
-                    "data (bin presentations, peak) se nevykreslí."
-                )
-            else:
-                site_options = sorted(cap_site_map.keys())
-                cap_site = st.selectbox(
-                    "CubeAnalytics site for capacity chart",
-                    options=site_options,
-                    index=site_options.index(default_site),
-                    key="prio_cap_site",
-                    help="Which CubeAnalytics installation the hourly Bin/User time "
-                         "and bins-picked-per-hour data is read from.",
-                )
-
-    plan_planned = None
-    if plan_file is not None:
-        try:
-            plan_raw = pd.read_csv(plan_file, sep=";")
-            plan_raw["parsed_date"] = pd.to_datetime(
-                plan_raw["Date"].str.extract(r"(\w+ \w+ \d+ \d+)")[0], format="%a %b %d %Y"
-            )
-            plan_day = plan_raw[plan_raw["parsed_date"].dt.date == target_date]
-            if not plan_day.empty:
-                row = plan_day.iloc[0]
-                plan_planned = {}
-                for h in range(0, 24):
-                    p_col = f"order-planned-{h}"
-                    if p_col in row.index and pd.notna(row[p_col]) and str(row[p_col]).strip():
-                        plan_planned[h] = float(str(row[p_col]).replace(",", ""))
-                    else:
-                        plan_planned[h] = 0.0
-        except Exception:
-            pass
-
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Warehouse", warehouse)
-    col2.metric("Date", str(target_date))
-    col3.metric("AutoStore 91", f"{len(df_91_scatter):,}")
-    col4.metric("AutoStore 92", f"{len(df_92_scatter):,}")
-    st.divider()
-
-    st.markdown("#### AutoStore 91")
-    stats_91 = _compute_stats(df_91_scatter)
-    if stats_91:
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Total", f"{stats_91['Total']:,}")
-        c2.metric("Same-day", f"{stats_91['Same-day']:,}")
-        c3.metric("Next-day", f"{stats_91['Next-day']:,}")
-        c4.metric("On Time", f"{stats_91['On Time %']}%")
-        c5.metric("Late", f"{stats_91['Late %']}%")
-        c6.metric("Median", f"{stats_91['Median same-day (min)']} min")
-
-        df_wait_91 = _load_wait_df(91, cap_site_map, cap_site, target_date) if (show_capacity and cap_site) else None
-        if df_wait_91 is not None:
-            df_win_91 = _load_maxcap_df(91, cap_site_map, cap_site, target_date)
-            fig_91 = _combined_chart(df_91_scatter, df_wait_91, 91, warehouse,
-                                     df_91, target_date, plan_planned, cap_site,
-                                     df_wait_window=df_win_91)
-        else:
-            fig_91 = _generate_chart(df_91_scatter, 91, warehouse,
-                                     full_data=df_91, target_date=target_date, plan_planned=plan_planned)
-        st.pyplot(fig_91)
-        st.download_button("Download PNG — AS91", data=_fig_to_bytes(fig_91),
-                           file_name=f"prio_vs_picking_{warehouse}_as91.png", mime="image/png", key="dl_91")
-        plt.close(fig_91)
-    else:
-        st.warning("No data for AutoStore 91")
-
-    st.divider()
-    st.markdown("#### AutoStore 92")
-    stats_92 = _compute_stats(df_92_scatter)
-    if stats_92:
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Total", f"{stats_92['Total']:,}")
-        c2.metric("Same-day", f"{stats_92['Same-day']:,}")
-        c3.metric("Next-day", f"{stats_92['Next-day']:,}")
-        c4.metric("On Time", f"{stats_92['On Time %']}%")
-        c5.metric("Late", f"{stats_92['Late %']}%")
-        c6.metric("Median", f"{stats_92['Median same-day (min)']} min")
-
-        df_wait_92 = _load_wait_df(92, cap_site_map, cap_site, target_date) if (show_capacity and cap_site) else None
-        if df_wait_92 is not None:
-            df_win_92 = _load_maxcap_df(92, cap_site_map, cap_site, target_date)
-            fig_92 = _combined_chart(df_92_scatter, df_wait_92, 92, warehouse,
-                                     df_92, target_date, plan_planned, cap_site,
-                                     df_wait_window=df_win_92)
-        else:
-            fig_92 = _generate_chart(df_92_scatter, 92, warehouse,
-                                     full_data=df_92, target_date=target_date, plan_planned=plan_planned)
-        st.pyplot(fig_92)
-        st.download_button("Download PNG — AS92", data=_fig_to_bytes(fig_92),
-                           file_name=f"prio_vs_picking_{warehouse}_as92.png", mime="image/png", key="dl_92")
-        plt.close(fig_92)
-    else:
-        st.warning("No data for AutoStore 92")
-
-    if show_comparison and stats_91 and stats_92:
-        st.divider()
-        st.markdown("#### AS91 vs AS92 Comparison")
-        comp = pd.DataFrame({"AutoStore 91": stats_91, "AutoStore 92": stats_92}).T
-        st.dataframe(comp, use_container_width=True)
-
-    if show_hourly:
-        st.divider()
-        st.markdown("#### Hourly Pick Task Distribution")
-        df["hour"] = df["Finished Picking At"].dt.hour
-        hourly = (
-            df.groupby(["hour", df["AutoStore"].str.extract(r"\.(\d{2})", expand=False)])
-            .size().unstack(fill_value=0)
+    store_dates, dropped = _ingest_upload(
+        df, warehouse, site_map, site, show_capacity, plan_by_date,
+        source=uploaded_file.name,
+    )
+    if not store_dates:
+        st.warning(
+            f"Nothing stored: the file has only the oldest day (**{dropped}**), "
+            "which is always dropped because it has no previous day for pre-pick. "
+            "Upload at least two days."
+            if dropped is not None else "No storable days in the file."
         )
-        hourly.columns = [f"AS{c}" for c in hourly.columns]
+        return
+    msg = f"Stored **{len(store_dates)}** day(s) for **{warehouse}** on the NAS."
+    if dropped is not None:
+        msg += f" Oldest day **{dropped}** skipped (no previous day → incomplete pre-pick)."
+    st.success(msg)
 
-        fig_h, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 6))
-        hourly.plot(kind="bar", ax=ax1, color=["#1f77b4", "#ff7f0e"])
-        ax1.set_title(f"Pick Tasks per Hour — {warehouse}", fontsize=14, fontweight="bold")
-        ax1.set_xlabel("Hour")
-        ax1.set_ylabel("Count")
-        ax1.grid(axis="y", alpha=0.3)
-
-        hourly_pct = hourly.div(hourly.sum(axis=1), axis=0) * 100
-        hourly_pct.plot(kind="bar", stacked=True, ax=ax2, color=["#1f77b4", "#ff7f0e"])
-        ax2.set_title(f"AutoStore Share per Hour — {warehouse}", fontsize=14, fontweight="bold")
-        ax2.set_xlabel("Hour")
-        ax2.set_ylabel("Share (%)")
-        ax2.set_ylim(0, 100)
-        ax2.grid(axis="y", alpha=0.3)
-
-        plt.tight_layout()
-        st.pyplot(fig_h)
-        st.download_button("Download PNG — Hourly", data=_fig_to_bytes(fig_h),
-                           file_name=f"hourly_{warehouse}.png", mime="image/png", key="dl_hourly")
-        plt.close(fig_h)
+    _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
+                       site_map, site, hourly_context_df=df)
