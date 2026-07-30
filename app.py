@@ -47,7 +47,7 @@ st.markdown("<h1 style='margin:0 0 12px 0; font-size:1.8em; color:#111827; font-
 
 PAGES = ["Home", "Reporting & Data Tools *", "System OEE *", "Test"]
 OEE_VIEWS = ["OEE Overview", "Availability KPI *", "Performance KPI", "Facility KPI *"]
-REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance", "PPP"]
+REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Performance", "PPP", "Live data"]
 SYSTEM_KPI_VIEWS = ["Availability KPI", "System *", "Ports *", "Robots *", "Chargers", "AutoStore system *", "Error & Health Metrics"]
 SYSTEM_VIEWS = ["Overview", "System mode periods"]
 PORTS_VIEWS = ["Overview", "Detailed Overview"]
@@ -203,6 +203,9 @@ elif selected == "Reporting & Data Tools *":
         render("Performance")
     elif reporting_view == "PPP":
         from views.ppp import render
+        render()
+    elif reporting_view == "Live data":
+        from views.live_data import render
         render()
 
 elif selected == "System OEE *":

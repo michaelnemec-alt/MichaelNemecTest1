@@ -1170,3 +1170,70 @@ def query_live_robots(installation_id, last_hours=48):
         df["ts"] = _parse_live_ts(df["ts"])
         df = df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
     return df
+
+
+# Live event types the REST live-events-stream accepts. CHARGER_STATE and
+# STATUS are WebSocket-only and rejected here (HTTP 400), so they are excluded.
+LIVE_EVENT_TYPES = (
+    "BIN_AND_TASK", "ROBOT_STATE", "DOOR_STATE", "DELAYED_SYSTEM_STOP",
+    "SYSTEM_MODE", "INCIDENT", "PORT_STATE", "PORT_ERROR", "ROBOT_ERROR",
+)
+
+
+@st.cache_data(ttl=_LIVE_TTL_SECONDS, max_entries=_CACHE_MAX_ENTRIES)
+def query_live_event_table(installation_id, event_type, last_hours=48):
+    """Flatten arbitrary live events into a per-record table for display.
+
+    For array-valued events (DOOR_STATE door_states, ROBOT_STATE robots, …)
+    each nested record becomes a row with a parsed 'ts'; scalar events (e.g.
+    SYSTEM_MODE, INCIDENT, DELAYED_SYSTEM_STOP) give one row per event.
+    Returns a DataFrame sorted by ts. Rolling last ~48h only.
+    """
+    rows = []
+    for e in _fetch_live_events(installation_id, last_hours, event_type):
+        ts = e.get("local_installation_timestamp")
+        for rec in _flatten_event_data(e.get("data", {})):
+            rows.append({"ts": ts, **rec})
+    if not rows:
+        return pd.DataFrame(columns=["ts"])
+    df = pd.DataFrame(rows)
+    df["ts"] = _parse_live_ts(df["ts"])
+    df = df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    return df
+
+
+def _flatten_one(d):
+    """Flatten a dict one level deep, keeping scalars and the scalar sub-keys
+    of any nested dict (e.g. DOOR_STATE's state -> grid/robot)."""
+    row = {}
+    for k, v in d.items():
+        if isinstance(v, dict):
+            for sk, sv in v.items():
+                if not isinstance(sv, (list, dict)):
+                    row[sk] = sv
+        elif not isinstance(v, list):
+            row[k] = v
+    return row
+
+
+def _flatten_event_data(data):
+    """Turn one event's data object into a list of flat dict rows.
+
+    If the event has exactly one list-valued key (robots, door_states, ports,
+    …) it explodes into one row per element; otherwise the scalar event yields
+    a single row.
+    """
+    if not isinstance(data, dict):
+        return [{"value": data}]
+    list_keys = [k for k, v in data.items() if isinstance(v, list)]
+    if len(list_keys) == 1:
+        key = list_keys[0]
+        scalars = {k: v for k, v in data.items() if k != key}
+        out = []
+        for item in data[key]:
+            if isinstance(item, dict):
+                out.append({**scalars, **_flatten_one(item)})
+            else:
+                out.append({**scalars, key: item})
+        return out or [scalars]
+    return [_flatten_one(data)]
