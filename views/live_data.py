@@ -209,7 +209,7 @@ def _render_chargers(inst_id, label):
                    "(R5 charge points do not send temperatures).")
     st.markdown("**State per charger (latest snapshot)**")
     st.dataframe(
-        snap[["charger_id", "charger_type", "state", *_CHARGER_STATES]]
+        snap[["charger_id", "charger_type", "state", "temp_max", *_CHARGER_STATES]]
         .sort_values("charger_id"),
         use_container_width=True, hide_index=True)
     st.markdown("**Data (5-min, per charger)**")

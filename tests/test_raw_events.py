@@ -60,8 +60,9 @@ def test_read_and_concurrent():
             today = date.today().isoformat()
             ts = now.replace(microsecond=0).isoformat()
             evs = [_event(inst, ts, [
+                # temp arrives as tenths of a degree (410 -> 41.0 C)
                 _charger(1, "charging",
-                         {"on": 0, "off": 0, "charging": 300, "error": 0}, temp=41.0),
+                         {"on": 0, "off": 0, "charging": 300, "error": 0}, temp=410),
                 _charger(2, "on",
                          {"on": 300, "off": 0, "charging": 0, "error": 0}),
             ], today)]
@@ -70,7 +71,7 @@ def test_read_and_concurrent():
             df = raw_events.read_charger_state(inst, 48)
             assert len(df) == 2
             assert set(df["charger_id"]) == {1, 2}
-            # temp extracted from the one non-null connector field
+            # temp extracted from the one non-null connector field, scaled /10
             assert df.loc[df["charger_id"] == 1, "temp_max"].iloc[0] == 41.0
 
             conc = raw_events.charger_state_concurrent(df)

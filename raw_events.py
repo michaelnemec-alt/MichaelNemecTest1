@@ -77,13 +77,23 @@ def read_charger_state(installation_id, last_hours=48):
         ts = e.get("local_installation_timestamp")
         for ch in e.get("data", {}).get("chargers", []):
             spans = ch.get("state_time_span_seconds", {}) or {}
-            temps = [ch.get(f) for f in temp_fields if ch.get(f) is not None]
+            # All temperatures come as tenths of a degree Celsius (per the
+            # CubeAnalytics schema), so scale by 1/10.
+            temp_cols = {}
+            temp_vals = []
+            for f in temp_fields:
+                v = ch.get(f)
+                scaled = float(v) / 10.0 if v is not None else float("nan")
+                temp_cols[f] = scaled
+                if v is not None:
+                    temp_vals.append(scaled)
             rows.append({
                 "ts": ts,
                 "charger_id": ch.get("charger_id"),
                 "charger_type": ch.get("charger_type", ""),
                 "state": ch.get("state", ""),
-                "temp_max": max(temps) if temps else float("nan"),
+                "temp_max": max(temp_vals) if temp_vals else float("nan"),
+                **temp_cols,
                 **{s: float(spans.get(s, 0) or 0) for s in _CHARGER_STATES},
             })
     if not rows:
