@@ -1107,6 +1107,33 @@ def query_live_jobs(installation_id, last_hours=48):
 
 
 @st.cache_data(ttl=_LIVE_TTL_SECONDS, max_entries=_CACHE_MAX_ENTRIES)
+def query_live_robot_battery(installation_id, last_hours=48):
+    """Per-robot battery % over time from the ROBOT_STATE live event.
+
+    Returns a wide DataFrame: index-less with a 'ts' column and one column per
+    robot_id holding its battery %. Rolling last ~48h only.
+    """
+    rows = []
+    for e in _fetch_live_events(installation_id, last_hours, "ROBOT_STATE"):
+        ts = e.get("local_installation_timestamp")
+        for r in e.get("data", {}).get("robots", []):
+            b = r.get("battery")
+            rid = r.get("robot_id")
+            if b is None or rid is None:
+                continue
+            rows.append({"ts": ts, "robot_id": int(rid), "battery": b})
+    if not rows:
+        return pd.DataFrame(columns=["ts"])
+    long = pd.DataFrame(rows)
+    long["ts"] = _parse_live_ts(long["ts"])
+    long = long.dropna(subset=["ts"])
+    wide = long.pivot_table(index="ts", columns="robot_id", values="battery",
+                            aggfunc="last").sort_index()
+    wide.columns = [f"R{c}" for c in wide.columns]
+    return wide.reset_index()
+
+
+@st.cache_data(ttl=_LIVE_TTL_SECONDS, max_entries=_CACHE_MAX_ENTRIES)
 def query_live_robots(installation_id, last_hours=48):
     """Robot activity per 5-min live event for one installation.
 

@@ -12,7 +12,7 @@ import picking_store
 from snowflake_utils import is_snowflake_configured, get_available_warehouses, query_picking_data
 from cubeanalytics_utils import (
     is_api_configured, get_installations, query_port_wait_time,
-    query_live_jobs, query_live_robots,
+    query_live_jobs, query_live_robots, query_live_robot_battery,
 )
 
 
@@ -806,11 +806,23 @@ def _date_grid_picker(dates, key_prefix):
     return st.session_state[sel_key]
 
 
-def _live_time_axis(ax, ts):
-    """Format an x-axis of tz-aware live timestamps as day+hour, local wall-clock."""
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%a %H:%M"))
-    ax.xaxis.set_major_locator(mdates.HourLocator(interval=4))
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+def _live_time_axis(ax, ts, dense=False):
+    """Format an x-axis of live timestamps as day+hour, local wall-clock.
+
+    dense=True adds hourly major ticks and 15-minute minor gridlines for a
+    fine-grained axis (like the per-robot battery view); otherwise ticks are
+    every 4 hours to keep the wider charts readable.
+    """
+    if dense:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%a %H:%M"))
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=1))
+        ax.xaxis.set_minor_locator(mdates.MinuteLocator(byminute=(15, 30, 45)))
+        ax.grid(which="minor", axis="x", alpha=0.15, color="#cccccc", linestyle=":")
+        plt.setp(ax.get_xticklabels(), rotation=90, ha="center", fontsize=7)
+    else:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%a %H:%M"))
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=4))
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
     if len(ts) > 1:
         ax.set_xlim(ts.iloc[0], ts.iloc[-1])
 
@@ -818,9 +830,10 @@ def _live_time_axis(ax, ts):
 def _draw_live_test_section(site_map, site, last_hours=48):
     """AS91 live test charts from the CubeAnalytics live event stream (~48h, 5-min).
 
-    Three stacked charts: (1) robots working vs available, (2) job counts, and
-    (3) average fleet battery %. This is live/rolling data (short retention), so
-    it is independent of the uploaded-CSV calendar date.
+    Four stacked charts: (1) robots working vs available, (2) job counts,
+    (3) average fleet battery %, and (4) per-robot battery %. This is
+    live/rolling data (short retention), so it is independent of the
+    uploaded-CSV calendar date.
     """
     st.divider()
     st.markdown("### AutoStore 91 — live test (last 48h, 5-min)")
@@ -839,6 +852,7 @@ def _draw_live_test_section(site_map, site, last_hours=48):
         try:
             jobs = query_live_jobs(inst_id, last_hours)
             robots = query_live_robots(inst_id, last_hours)
+            battery = query_live_robot_battery(inst_id, last_hours)
         except Exception as e:
             st.error(f"Live event stream query failed: {e}")
             return
@@ -932,6 +946,30 @@ def _draw_live_test_section(site_map, site, last_hours=48):
                            file_name="as91_live_battery.png", mime="image/png",
                            key="dl_live_battery")
         plt.close(fig3)
+
+    # Chart 4 — per-robot battery %.
+    robot_cols = [c for c in battery.columns if c != "ts"] if not battery.empty else []
+    if robot_cols:
+        fig4, ax = plt.subplots(figsize=(28, 8), dpi=130)
+        fig4.patch.set_facecolor("white")
+        ax.set_facecolor("#31333a")
+        ax.grid(True, alpha=0.25, color="#666666")
+        cmap = plt.get_cmap("tab20")
+        for i, col in enumerate(robot_cols):
+            ax.plot(battery["ts"], battery[col], linewidth=0.9,
+                    color=cmap(i % 20), alpha=0.9)
+        ax.set_ylabel("Battery %", fontsize=13)
+        ax.set_ylim(0, 105)
+        ax.set_title(f"AS91 — Battery level per robot ({len(robot_cols)} robots, "
+                     f"live 48h)", fontsize=15, fontweight="bold")
+        _live_time_axis(ax, battery["ts"], dense=True)
+        fig4.tight_layout()
+        st.pyplot(fig4)
+        st.download_button("Download PNG — AS91 battery per robot (live)",
+                           data=_fig_to_bytes(fig4),
+                           file_name="as91_live_battery_per_robot.png",
+                           mime="image/png", key="dl_live_battery_robot")
+        plt.close(fig4)
 
 
 def _maybe_live_test(show_live_test, warehouse):
