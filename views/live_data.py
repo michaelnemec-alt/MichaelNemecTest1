@@ -8,6 +8,7 @@ the API. A day selector narrows the 48h window to a single calendar day so the
 import io
 from datetime import date, timedelta
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -47,10 +48,39 @@ _ROBOT_SERIES = ["working", "available", "recovery", "unavailable",
 
 
 def _line_chart(df, cols, decimals=1):
-    """Native Streamlit/Altair line chart. Values are rounded to `decimals`
-    places so the hover tooltip never shows long floats."""
-    data = df.set_index("ts")[[c for c in cols if c in df.columns]].round(decimals)
-    st.line_chart(data)
+    """Line chart with a 24h x-axis. Timestamps are the installation's local
+    wall-clock and tz-naive, so Vega renders them literally (HH:MM) with no
+    browser-timezone shift. Values are rounded to `decimals` so the hover
+    tooltip never shows long floats."""
+    cols = [c for c in cols if c in df.columns]
+    data = df[["ts"] + cols].copy()
+    data[cols] = data[cols].round(decimals)
+    long = data.melt("ts", var_name="series", value_name="value")
+    # A legend with dozens of series (e.g. per-robot battery) is unreadable, so
+    # only show it — with a fixed order — for a small number of series.
+    if len(cols) <= 12:
+        color = alt.Color("series:N", title=None,
+                          sort=cols, scale=alt.Scale(domain=cols))
+    else:
+        color = alt.Color("series:N", legend=None)
+    chart = (
+        alt.Chart(long)
+        .mark_line()
+        .encode(
+            x=alt.X("ts:T", title=None,
+                    axis=alt.Axis(format="%H:%M", labelOverlap=True)),
+            y=alt.Y("value:Q", title=None),
+            color=color,
+            tooltip=[
+                alt.Tooltip("ts:T", title="time", format="%Y-%m-%d %H:%M"),
+                alt.Tooltip("series:N", title="series"),
+                alt.Tooltip("value:Q", title="value"),
+            ],
+        )
+        .properties(height=300)
+        .configure_axisX(labelAngle=0)
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 def _bar_chart(series):
@@ -197,8 +227,24 @@ def _render_chargers(inst_id, label):
     c3.metric("On now", int(snap_counts.get("on", 0)))
     c4.metric("Off / error now",
               int(snap_counts.get("off", 0) + snap_counts.get("error", 0)))
-    st.caption(f"'Now' = latest snapshot {latest_ts:%H:%M}. "
-               f"Charger type: {', '.join(sorted(d['charger_type'].unique()))}.")
+    by_type = (snap.groupby("charger_type")["charger_id"].nunique()
+               .sort_values(ascending=False))
+    type_str = ", ".join(f"{n}× {t}" for t, n in by_type.items())
+    st.caption(f"'Now' = latest snapshot {latest_ts:%H:%M} (site local time). "
+               f"Charger types: {type_str}.")
+    lithium = [t for t in by_type.index if "QUICK" in t.upper()]
+    non_lithium = [t for t in by_type.index if "QUICK" not in t.upper()]
+    if non_lithium:
+        st.info(
+            "Note: only lithium chargers (e.g. **QUICK_V1**) report `charging` "
+            "seconds and temperatures. **R5/R5+ charge points** report only "
+            "on/off, so their `charging` shows 0 and temperature is empty even "
+            "while robots are physically charging. For fleet charging use the "
+            "**Robots (state & battery)** event (`charging_available` / "
+            "`charging_unavailable`), which is reported for every site."
+            + ("" if lithium else
+               " This site has no lithium chargers, so `charging` here is "
+               "always 0 by design."))
     st.markdown("**Chargers by state — avg concurrent (5-min)**")
     _line_chart(conc, [s for s in _CHARGER_STATES if s in conc.columns])
     if conc["temp_max"].notna().any():

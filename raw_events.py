@@ -99,7 +99,13 @@ def read_charger_state(installation_id, last_hours=48):
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
-    df["ts"] = pd.to_datetime(df["ts"], errors="coerce", utc=True).dt.tz_localize(None)
+    # Keep the installation's local wall-clock: local_installation_timestamp
+    # carries the site's UTC offset (e.g. +02:00), so strip the trailing offset
+    # instead of converting to UTC (which would shift the whole day by the
+    # offset and mislabel evening snapshots as morning).
+    naive = df["ts"].astype(str).str.replace(
+        r"(Z|[+-]\d{2}:?\d{2})$", "", regex=True)
+    df["ts"] = pd.to_datetime(naive, errors="coerce")
     df = df.dropna(subset=["ts"])
     cutoff = datetime.now() - timedelta(hours=int(last_hours))
     df = df[df["ts"] >= cutoff]
