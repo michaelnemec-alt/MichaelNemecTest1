@@ -743,6 +743,13 @@ def _draw_hourly_distribution(df, warehouse):
 def _date_grid_picker(dates, key_prefix):
     """Month calendar (Mon-first) where days with stored data are shaded and
     clickable and days without data are plain. Returns the selected date."""
+    st.html(
+        "<style>"
+        "div[data-testid='stColumn'] button{padding:2px 2px !important;"
+        "min-height:0 !important}"
+        "div[data-testid='stColumn'] button p{white-space:nowrap !important;"
+        "font-size:0.85rem !important;line-height:1.1 !important;margin:0 !important}"
+        "</style>")
     available = set(dates)
     sel_key = f"{key_prefix}_sel"
     view_key = f"{key_prefix}_view"
@@ -753,25 +760,30 @@ def _date_grid_picker(dates, key_prefix):
         st.session_state[view_key] = (selected.year, selected.month)
     vy, vm = st.session_state[view_key]
 
-    c_prev, c_lbl, c_next = st.columns([1, 3, 1])
+    # Keep the grid at ~30% width by parking a wide empty spacer column on the
+    # right (nesting real columns inside a layout column isn't allowed).
+    spacer = 16
+    day_w = [1] * 7 + [spacer]
+    c_prev, c_lbl, c_next, _ = st.columns([2, 3, 2, spacer])
     if c_prev.button("◀", key=f"{key_prefix}_prev", use_container_width=True):
         st.session_state[view_key] = (vy - 1, 12) if vm == 1 else (vy, vm - 1)
         st.rerun()
     c_lbl.markdown(
-        f"<div style='text-align:center;font-weight:600;padding-top:6px'>"
-        f"{calendar.month_name[vm]} {vy}</div>", unsafe_allow_html=True)
+        f"<div style='text-align:center;font-weight:600;padding-top:6px;"
+        f"font-size:0.8rem'>{calendar.month_name[vm]} {vy}</div>",
+        unsafe_allow_html=True)
     if c_next.button("▶", key=f"{key_prefix}_next", use_container_width=True):
         st.session_state[view_key] = (vy + 1, 1) if vm == 12 else (vy, vm + 1)
         st.rerun()
 
-    hdr = st.columns(7)
+    hdr = st.columns(day_w)
     for i, name in enumerate(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]):
         hdr[i].markdown(
-            f"<div style='text-align:center;color:#888;font-size:0.8rem'>{name}</div>",
+            f"<div style='text-align:center;color:#888;font-size:0.7rem'>{name}</div>",
             unsafe_allow_html=True)
 
     for week in calendar.Calendar(firstweekday=0).monthdatescalendar(vy, vm):
-        cols = st.columns(7)
+        cols = st.columns(day_w)
         for i, day in enumerate(week):
             if day.month != vm:
                 cols[i].markdown("&nbsp;", unsafe_allow_html=True)
