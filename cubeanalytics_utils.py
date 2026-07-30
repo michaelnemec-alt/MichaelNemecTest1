@@ -1040,6 +1040,40 @@ def query_module_versions(installation_id, date_from_str, date_to_str):
     return df
 
 
+@st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
+def query_module_device_versions(installation_id, date_from_str, date_to_str):
+    """Per-device firmware from the module-versions endpoint.
+
+    Unlike query_module_versions (one representative version per module), this
+    keeps the full breakdown: one row per (date, module, module_id, sub_module,
+    value) so each robot/port/charger/access-point component can be inspected.
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/module-versions/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_days(url, params)
+
+    rows = []
+    for day_result in results:
+        d = day_result.get("date")
+        data = day_result.get("result", {}).get("data", {})
+        for module, inst_map in data.items():
+            for module_id, entries in inst_map.items():
+                for e in entries:
+                    rows.append({
+                        "date": d,
+                        "module": module,
+                        "module_id": str(module_id),
+                        "sub_module": e.get("sub_module") or "(module)",
+                        "value": e.get("data"),
+                    })
+
+    cols = ["date", "module", "module_id", "sub_module", "value"]
+    df = pd.DataFrame(rows, columns=cols)
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
 # --- Live event stream (BIN_AND_TASK / ROBOT_STATE, last ~48h, 5-min) ------
 # Unlike the daily REST endpoints, live-events-stream is a short-retention
 # repository of the WebSocket events: only the last 48h (lastHours) or a max

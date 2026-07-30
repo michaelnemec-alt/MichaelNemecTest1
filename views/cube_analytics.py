@@ -11,6 +11,7 @@ import re
 import threading
 import time
 import traceback
+from collections import Counter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("cube_analytics")
@@ -31,7 +32,7 @@ from cubeanalytics_utils import (
     query_port_wait_time_daily, query_port_uptime, query_port_uptime_per_port,
     query_incidents, query_robot_errors,
     query_recovery_times, query_installation_data, query_module_versions, query_bins_above,
-    query_bin_usage,
+    query_bin_usage, query_module_device_versions,
 )
 
 SITE_COLORS = [
@@ -1961,7 +1962,14 @@ def _view_facility_incidents(date_from_str, date_to_str, aggregation):
     st.plotly_chart(_make_trend_chart(pivot, "Incident Count", "Count"), use_container_width=True)
 
 
-AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
+AUTOSTORE_VIEWS = ["Versions of Systems", "Versions of Modules", "Bin overview"]
+
+_MODULE_CATEGORIES = {
+    "Robots": "ASROBOTS",
+    "Ports": "ASPORTS",
+    "Chargers": "ASCHARGERS",
+    "Access points": "ACCESS_POINTS",
+}
 
 _TABLE_CSS = """
 <style>
@@ -2087,7 +2095,10 @@ def render_autostore(selected_view="Versions of Systems"):
                 st.caption("Showing the latest reported module versions. No date/aggregation filter applies here.")
             dt_to = date.today()
             dt_from = dt_to - timedelta(days=14)
-            _view_versions(str(dt_from), str(dt_to))
+            if selected_view == "Versions of Modules":
+                _view_module_versions(str(dt_from), str(dt_to))
+            else:
+                _view_versions(str(dt_from), str(dt_to))
         logger.info("=== render_autostore() completed for '%s' ===", selected_view)
     except Exception as e:
         logger.error("=== render_autostore() CRASHED for '%s': %s ===", selected_view, e)
@@ -2120,6 +2131,9 @@ def _site_code(name):
     """Map a (possibly prefixed) site name to its short code, else the short name."""
     short = _short_site(name)
     return _SITE_CODES.get(short, short)
+
+
+_VERSION_LIKE = re.compile(r"^\d+(\.\d+)+")
 
 
 def _version_key(value):
@@ -2185,17 +2199,20 @@ def _bins_outside_timeseries(df_inst):
     return g[["site", "date", "bins_outside_pct"]]
 
 
-def _render_version_table(table):
-    """Render the module x site version table, marking outdated cells red.
+def _render_version_table(table, row_label="Module"):
+    """Render a (rows x site) version table, marking outdated cells red.
 
     A cell is flagged outdated (red) when its version is behind the newest
-    version any site in the fleet runs for that module.
+    version any site in the fleet runs for that row. Only version-looking
+    values (e.g. 1.2.3) take part in the comparison, so non-version rows such
+    as TYPE or BIN_TYPE are shown as-is without highlighting.
     """
     sites = list(table.columns)
     header = "".join(f"<th>{s}</th>" for s in sites)
     rows = []
     for module, row in table.iterrows():
-        keys = {s: _version_key(row[s]) for s in sites if str(row[s]) not in ("", "—")}
+        keys = {s: _version_key(row[s]) for s in sites
+                if str(row[s]) not in ("", "—") and _VERSION_LIKE.match(str(row[s]))}
         max_key = max(keys.values()) if keys else ()
         cells = []
         for s in sites:
@@ -2207,7 +2224,7 @@ def _render_version_table(table):
         rows.append(f'<tr><td class="as-rowhdr">{module}</td>{"".join(cells)}</tr>')
     html = (
         f'{_TABLE_CSS}<div class="as-table-wrap"><table class="as-table">'
-        f'<thead><tr><th class="as-rowhdr">Module</th>{header}</tr></thead>'
+        f'<thead><tr><th class="as-rowhdr">{row_label}</th>{header}</tr></thead>'
         f'<tbody>{"".join(rows)}</tbody></table></div>'
     )
     st.markdown(html, unsafe_allow_html=True)
@@ -2237,6 +2254,58 @@ def _view_versions(date_from_str, date_to_str):
         "in the fleet runs for that module.",
     )
     _render_version_table(table)
+
+
+def _rep_value(values):
+    """Representative value for a group of per-device values. Most common wins;
+    a trailing '*' marks a component reporting more than one distinct value."""
+    vals = [str(v) for v in values if v is not None and str(v) not in ("", "—")]
+    if not vals:
+        return ""
+    cnt = Counter(vals)
+    top = cnt.most_common(1)[0][0]
+    return top + (" *" if len(cnt) > 1 else "")
+
+
+def _view_module_versions(date_from_str, date_to_str):
+    with st.spinner("Loading per-device module versions..."):
+        df = _load_for_sites(query_module_device_versions, date_from_str, date_to_str)
+
+    _title_with_info(
+        "Versions of Modules",
+        "Per-device firmware from the module-versions endpoint, grouped by "
+        "component (rows) and site (columns). Each cell is the version that "
+        "site's devices run; a trailing * means devices on that site disagree. "
+        "Version-looking cells are highlighted red when the site lags behind the "
+        "newest version any site in the fleet runs for that component.",
+    )
+    if df.empty:
+        st.warning("No module-version data returned for the selected range.")
+        return
+
+    latest = df.loc[df.groupby("site")["date"].transform("max") == df["date"]]
+
+    category = st.radio(
+        "Module", list(_MODULE_CATEGORIES), horizontal=True, key="modver_category"
+    )
+    module = _MODULE_CATEGORIES[category]
+    sub = latest[latest["module"] == module]
+    if sub.empty:
+        st.info(f"No {category.lower()} reported for the fleet.")
+        return
+
+    counts = sub.groupby("site")["module_id"].nunique()
+    st.caption(
+        "Devices per site: "
+        + ", ".join(f"{_site_code(s)} {n}" for s, n in counts.items())
+    )
+
+    table = sub.pivot_table(
+        index="sub_module", columns="site", values="value", aggfunc=_rep_value
+    )
+    table.columns = [_site_code(s) for s in table.columns]
+    table = table.fillna("—")
+    _render_version_table(table, row_label="Component")
 
 
 def _view_bin_overview(date_from_str, date_to_str, aggregation):

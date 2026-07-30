@@ -53,7 +53,7 @@ SYSTEM_VIEWS = ["Overview", "System mode periods"]
 PORTS_VIEWS = ["Overview", "Detailed Overview"]
 ROBOTS_VIEWS = ["Overview", "Detailed Overview"]
 FACILITY_VIEWS = ["Time to Recover", "Reliability", "Incidents"]
-AUTOSTORE_VIEWS = ["Versions of Systems", "Bin overview"]
+AUTOSTORE_VIEWS = ["Versions of Systems", "Versions of Modules", "Bin overview"]
 
 selected = st.segmented_control(
     "nav",
