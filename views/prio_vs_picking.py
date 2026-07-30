@@ -13,6 +13,7 @@ from snowflake_utils import is_snowflake_configured, get_available_warehouses, q
 from cubeanalytics_utils import (
     is_api_configured, get_installations, query_port_wait_time,
     query_live_jobs, query_live_robots, query_live_robot_battery,
+    query_robot_state_hourly,
 )
 
 
@@ -292,24 +293,64 @@ def _maxcap_hourly(df_wait_window, quantile=0.95):
     return out
 
 
-def _capacity_arrays(df_wait_day, target_date, df_wait_window=None):
+def _robot_util_hourly(df_robot_hourly, target_date):
+    """Per-hour robot utilisation (working_s / total_s) for one day, 24 slots.
+
+    NaN where the hour has no robot-state data so the theoretical-max ceiling is
+    simply not drawn there rather than dividing by zero.
+    """
+    out = [float("nan")] * 24
+    if df_robot_hourly is None or df_robot_hourly.empty:
+        return out
+    d = df_robot_hourly[df_robot_hourly["date"].dt.date == target_date]
+    if d.empty:
+        return out
+    g = d.groupby("hour")[["working_s", "total_s"]].sum()
+    for h in range(24):
+        if h in g.index and g.loc[h, "total_s"] > 0:
+            out[h] = float(g.loc[h, "working_s"] / g.loc[h, "total_s"])
+    return out
+
+
+def _theomax_hourly(total_bins, util):
+    """Theoretical bin presentations/hour at 100% robot utilisation.
+
+    theomax(h) = total_bins(h) / utilisation(h): the throughput the same fleet
+    would reach if every robot worked the whole hour. 0 where utilisation is
+    unknown or zero.
+    """
+    out = [0.0] * 24
+    for h in range(24):
+        u = util[h]
+        if u and u == u and u > 0:
+            out[h] = float(total_bins[h]) / u
+    return out
+
+
+def _capacity_arrays(df_wait_day, target_date, df_wait_window=None,
+                     df_robot_hourly=None):
     """Bundle every hourly capacity series for one day into 24-slot lists.
 
-    df_wait_day    : single-day (or wider) port-wait data; bin/user time and
-                     total bin presentations are read from the target_date slice.
-    df_wait_window : the look-back window ending at target_date, used only for
-                     the 95th-percentile peak envelope. This is what gets frozen
-                     so the envelope reflects the window as of that day.
+    df_wait_day     : single-day (or wider) port-wait data; bin/user time and
+                      total bin presentations are read from the target_date slice.
+    df_wait_window  : the look-back window ending at target_date, used only for
+                      the 95th-percentile peak envelope. This is what gets frozen
+                      so the envelope reflects the window as of that day.
+    df_robot_hourly : hourly robot-state for target_date, used to scale actual
+                      throughput to a 100%-robot-utilisation ceiling (theomax).
     """
     _, bin_time, user_time, bins = _capacity_hourly(df_wait_day, target_date)
     total_bins = _bin_presentations_hourly(df_wait_day, target_date)
     maxcap = _maxcap_hourly(df_wait_window) if df_wait_window is not None else [0.0] * 24
+    util = _robot_util_hourly(df_robot_hourly, target_date)
+    theomax = _theomax_hourly(total_bins, util)
     return {
         "bin_time": bin_time,
         "user_time": user_time,
         "bins": bins,
         "total_bins": total_bins,
         "maxcap": maxcap,
+        "theomax": theomax,
     }
 
 
@@ -403,6 +444,21 @@ def _load_maxcap_df(autostore_num, site_map, selected_site, target_date, months=
             return None
 
 
+def _load_robot_hourly_df(autostore_num, site_map, selected_site, target_date):
+    """Fetch one day of hourly robot-state for the theoretical-max ceiling."""
+    env = _AS_ENV.get(autostore_num)
+    inst_id = site_map.get(selected_site, {}).get(env)
+    if not inst_id:
+        return None
+    try:
+        return query_robot_state_hourly(
+            inst_id, str(target_date), str(target_date + timedelta(days=1))
+        )
+    except Exception as e:
+        st.warning(f"Robot-state query failed (AS{autostore_num}): {e}")
+        return None
+
+
 def _overlay_capacity(ax, cap, base_date):
     """Overlay hourly capacity data onto the scatter axes on their own y-axes.
 
@@ -421,6 +477,7 @@ def _overlay_capacity(ax, cap, base_date):
     bins = cap.get("bins", [0.0] * 24)
     total_bins = cap.get("total_bins")
     maxcap = cap.get("maxcap")
+    theomax = cap.get("theomax")
     x_num = mdates.date2num([base_date + pd.Timedelta(hours=h) for h in hours])
     w = 0.34 / 24.0
 
@@ -450,6 +507,8 @@ def _overlay_capacity(ax, cap, base_date):
         peak += list(total_bins)
     if maxcap is not None:
         peak += list(maxcap)
+    if theomax is not None:
+        peak += [v for v in theomax if v]
     bins_top = max(peak) * 1.05 if any(peak) else 1.0
     ax_bins = ax.twinx()
     ax_bins.spines["right"].set_position(("axes", 1.11))
@@ -459,6 +518,10 @@ def _overlay_capacity(ax, cap, base_date):
     if total_bins is not None and any(total_bins):
         ax_bins.plot(x_num, total_bins, color="#9aa0a6", linewidth=1.8,
                      label="Bin presentations / hour (total)")
+    if theomax is not None and any(theomax):
+        tm = [v if v else float("nan") for v in theomax]
+        ax_bins.plot(x_num, tm, color="#7d3cc7", linewidth=1.8, linestyle="--",
+                     label="Theoretical max / hour (@100% robot util)")
     ax_bins.plot(x_num, bins, color="#111111", linewidth=2, marker="o",
                  markersize=3.5, label="Bins picked / hour (cat 1+2)")
     ax_bins.set_ylim(*_aligned_ylim(bins_top))
@@ -570,12 +633,13 @@ def _resolve_cap_site(warehouse, show_capacity):
     return site_map, site
 
 
-def _capacity_for_day(site_map, site, target_date, big_by_as=None):
+def _capacity_for_day(site_map, site, target_date, big_by_as=None, robot_by_as=None):
     """Compute the frozen capacity arrays per AutoStore for one day, or None.
 
     big_by_as (optional) supplies a pre-fetched wider window per AS so an ingest
     of many days issues one API query instead of one per day; when absent it
     falls back to per-day queries (used by the live/recalculate paths).
+    robot_by_as mirrors big_by_as for hourly robot-state (theoretical-max line).
     """
     out = {}
     for num in (91, 92):
@@ -587,13 +651,15 @@ def _capacity_for_day(site_map, site, target_date, big_by_as=None):
                 (bw["Timestamp"].dt.date > target_date - timedelta(days=60))
                 & (bw["Timestamp"].dt.date <= target_date)
             ]
-            out[str(num)] = _capacity_arrays(bw, target_date, window)
+            rob = robot_by_as.get(num) if robot_by_as is not None else None
+            out[str(num)] = _capacity_arrays(bw, target_date, window, rob)
         else:
             df_wait = _load_wait_df(num, site_map, site, target_date)
             if df_wait is None:
                 continue
             df_win = _load_maxcap_df(num, site_map, site, target_date)
-            out[str(num)] = _capacity_arrays(df_wait, target_date, df_win)
+            df_robot = _load_robot_hourly_df(num, site_map, site, target_date)
+            out[str(num)] = _capacity_arrays(df_wait, target_date, df_win, df_robot)
     return out or None
 
 
@@ -609,12 +675,14 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
     store_dates = dates[1:]
 
     big_by_as = None
+    robot_by_as = None
     need_cap = show_capacity and site
     to_freeze = [d for d in store_dates if not picking_store.has_capacity(warehouse, d)]
     if need_cap and to_freeze:
         span_start = min(to_freeze) - timedelta(days=60)
         span_end = max(to_freeze) + timedelta(days=1)
         big_by_as = {}
+        robot_by_as = {}
         for num in (91, 92):
             env = _AS_ENV.get(num)
             inst = site_map.get(site, {}).get(env)
@@ -625,6 +693,12 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
                     big_by_as[num] = query_port_wait_time(inst, str(span_start), str(span_end))
                 except Exception as e:
                     st.warning(f"Peak-capacity query failed (AS{num}): {e}")
+                try:
+                    robot_by_as[num] = query_robot_state_hourly(
+                        inst, str(min(to_freeze)), str(span_end)
+                    )
+                except Exception as e:
+                    st.warning(f"Robot-state query failed (AS{num}): {e}")
 
     prog = st.progress(0.0, text="Storing days...")
     for i, d in enumerate(store_dates):
@@ -637,7 +711,9 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
         }
         capacity = None
         if need_cap and d in to_freeze:
-            capacity = _capacity_for_day(site_map, site, d, big_by_as=big_by_as)
+            capacity = _capacity_for_day(
+                site_map, site, d, big_by_as=big_by_as, robot_by_as=robot_by_as
+            )
         picking_store.save_day(
             warehouse, d, df_day, overlay, capacity=capacity,
             plan=plan_by_date.get(d), source=source, site=site,

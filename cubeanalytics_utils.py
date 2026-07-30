@@ -472,6 +472,52 @@ def query_robot_state_per_robot(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
+def query_robot_state_hourly(installation_id, date_from_str, date_to_str):
+    """Per (date, hour) robot working vs total time for one installation.
+
+    Keeps the hourly resolution the robot-state endpoint reports (keys like
+    '08:00:00'), summing seconds across all robots present that hour:
+      working_s = time robots spent working, total_s = total robot time,
+      utilization = working_s / total_s. total_s / 3600 is the robot count.
+    Used to scale actual throughput to a 100%-robot-utilisation ceiling.
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/robot-state/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_days(url, params)
+
+    rows = []
+    for day_result in results:
+        d = day_result.get("date")
+        robot_states = day_result.get("result", {}).get("robot_states", {})
+        if not isinstance(robot_states, dict):
+            continue
+        for hour_key, hour_robots in robot_states.items():
+            if not isinstance(hour_robots, list) or not hour_robots:
+                continue
+            try:
+                hour = int(str(hour_key).split(":")[0])
+            except ValueError:
+                continue
+            working_s = sum(r.get("working", 0) or 0 for r in hour_robots)
+            total_s = sum(r.get("total_time_s", 0) or 0 for r in hour_robots)
+            if total_s == 0:
+                continue
+            rows.append({
+                "date": d,
+                "hour": hour,
+                "working_s": working_s,
+                "total_s": total_s,
+                "n_robots": len(hour_robots),
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=["date", "hour", "working_s", "total_s", "n_robots"])
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
 def query_bin_presentations(installation_id, date_from_str, date_to_str):
     url = f"{BASE_URL}/installations/{installation_id}/bin-presentations/"
     params = {"after": date_from_str, "before": date_to_str}
