@@ -828,7 +828,12 @@ def render():
         )
 
     if data_source == "Saved history":
-        site_map, site = _resolve_cap_site(hist_wh, show_capacity)
+        # Frozen capacity is read from disk, so no site picker here. The site is
+        # resolved silently only so the today-only "Recalculate peak" button works.
+        site_map, site = {}, None
+        if show_capacity and is_api_configured():
+            site_map = _installation_site_map()
+            site = _default_capacity_site(site_map, hist_wh)
         _render_from_store(hist_wh, show_comparison, show_hourly, show_capacity,
                            site_map, site)
         return
