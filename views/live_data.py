@@ -16,12 +16,15 @@ from cubeanalytics_utils import (
     query_live_jobs, query_live_robots, query_live_robot_battery,
     query_live_event_table, query_access_point_load,
 )
+import raw_events
 
 _ACCESS_POINT_LOAD = "ACCESS_POINT_LOAD"
+_CHARGER_STATE = "CHARGER_STATE"
 
 _EVENT_LABELS = {
     "BIN_AND_TASK": "Jobs (bin & task)",
     "ROBOT_STATE": "Robots (state & battery)",
+    _CHARGER_STATE: "Chargers (state, collected)",
     "DOOR_STATE": "Doors (grid/robot door state)",
     "DELAYED_SYSTEM_STOP": "Delayed system stops",
     "SYSTEM_MODE": "System mode (running/stopped)",
@@ -32,7 +35,8 @@ _EVENT_LABELS = {
     _ACCESS_POINT_LOAD: "Access point load (radio, hourly)",
 }
 
-_EVENT_TYPES = list(LIVE_EVENT_TYPES) + [_ACCESS_POINT_LOAD]
+_EVENT_TYPES = list(LIVE_EVENT_TYPES) + [_CHARGER_STATE, _ACCESS_POINT_LOAD]
+_CHARGER_STATES = ["charging", "on", "off", "error"]
 
 _JOB_SERIES = [
     "total", "active", "unique", "total_prepared", "unique_prepared",
@@ -165,6 +169,54 @@ def _render_generic(inst_id, event_type, label):
     _download(d, f"{label}_{event_type.lower()}.csv", f"dl_live_{event_type}_page")
 
 
+def _render_chargers(inst_id, label):
+    if not raw_events.is_available():
+        st.warning(
+            "Charger data comes from the night collector (CHARGER_STATE is "
+            "WebSocket-only and not served by the REST live stream). The "
+            "collector store is not mounted here yet, so no charger data is "
+            "available.")
+        return
+    df = raw_events.read_charger_state(inst_id, 48)
+    if df.empty:
+        st.info("No collected CHARGER_STATE for this site yet — the collector "
+                "starts filling once it has been running.")
+        return
+    day = _day_picker(df, "live_charger_day")
+    d = _filter_day(df, day)
+    if d.empty:
+        st.info("No events for the selected day.")
+        return
+    conc = raw_events.charger_state_concurrent(d)
+    latest_ts = d["ts"].max()
+    snap = d[d["ts"] == latest_ts]
+    snap_counts = snap["state"].value_counts()
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Chargers", int(d["charger_id"].nunique()))
+    c2.metric("Charging now", int(snap_counts.get("charging", 0)))
+    c3.metric("On now", int(snap_counts.get("on", 0)))
+    c4.metric("Off / error now",
+              int(snap_counts.get("off", 0) + snap_counts.get("error", 0)))
+    st.caption(f"'Now' = latest snapshot {latest_ts:%H:%M}. "
+               f"Charger type: {', '.join(sorted(d['charger_type'].unique()))}.")
+    st.markdown("**Chargers by state — avg concurrent (5-min)**")
+    _line_chart(conc, [s for s in _CHARGER_STATES if s in conc.columns])
+    if conc["temp_max"].notna().any():
+        st.markdown("**Max charger/battery temperature (°C, 5-min)**")
+        _line_chart(conc, ["temp_max"])
+    else:
+        st.caption("No temperature readings reported by these chargers "
+                   "(R5 charge points do not send temperatures).")
+    st.markdown("**State per charger (latest snapshot)**")
+    st.dataframe(
+        snap[["charger_id", "charger_type", "state", *_CHARGER_STATES]]
+        .sort_values("charger_id"),
+        use_container_width=True, hide_index=True)
+    st.markdown("**Data (5-min, per charger)**")
+    st.dataframe(d, use_container_width=True, hide_index=True)
+    _download(d, f"{label}_charger_state.csv", "dl_live_charger_page")
+
+
 def _render_access_point_load(inst_id, label):
     today = date.today()
     df = query_access_point_load(inst_id, str(today - timedelta(days=3)),
@@ -228,6 +280,8 @@ def render():
                 _render_jobs(inst_id, site_label)
             elif event_type == "ROBOT_STATE":
                 _render_robots(inst_id, site_label)
+            elif event_type == _CHARGER_STATE:
+                _render_chargers(inst_id, site_label)
             elif event_type == _ACCESS_POINT_LOAD:
                 _render_access_point_load(inst_id, site_label)
             else:

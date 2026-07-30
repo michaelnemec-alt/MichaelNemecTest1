@@ -863,14 +863,14 @@ def _date_grid_picker(dates, key_prefix):
     c_prev, c_lbl, c_next, _ = st.columns([2, 3, 2, spacer])
     if c_prev.button("◀", key=f"{key_prefix}_prev", use_container_width=True):
         st.session_state[view_key] = (vy - 1, 12) if vm == 1 else (vy, vm - 1)
-        st.rerun()
+        st.rerun(scope="fragment")
     c_lbl.markdown(
         f"<div style='text-align:center;font-weight:600;padding-top:6px;"
         f"font-size:0.8rem'>{calendar.month_name[vm]} {vy}</div>",
         unsafe_allow_html=True)
     if c_next.button("▶", key=f"{key_prefix}_next", use_container_width=True):
         st.session_state[view_key] = (vy + 1, 1) if vm == 12 else (vy, vm + 1)
-        st.rerun()
+        st.rerun(scope="fragment")
 
     hdr = st.columns(day_w)
     for i, name in enumerate(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]):
@@ -889,7 +889,7 @@ def _date_grid_picker(dates, key_prefix):
                         type="primary" if day == selected else "secondary",
                         use_container_width=True):
                     st.session_state[sel_key] = day
-                    st.rerun()
+                    st.rerun(scope="fragment")
             else:
                 cols[i].markdown(
                     f"<div style='text-align:center;color:#ccc;padding:6px 0'>"
@@ -1078,34 +1078,45 @@ def _maybe_live_test(show_live_test, warehouse):
 
 def _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
                        site_map, site, hourly_context_df=None):
-    """Date-pick and render one stored day; offer to recalculate today's peak."""
+    """Date-pick and render one stored day; offer to recalculate today's peak.
+
+    The picker and the day view live in a fragment so that changing the day
+    reruns only this block — not the whole page — which keeps the surrounding
+    layout (and the scroll position) stable instead of jumping on every click.
+    """
     dates = picking_store.list_dates(warehouse)
     if not dates:
         st.info("No stored days for this warehouse yet.")
         return
-    st.markdown("**Select target date** — shaded days have stored data")
-    target_date = _date_grid_picker(dates, key_prefix=f"prio_cal_{warehouse}")
 
-    if site and target_date == date.today():
-        if st.button("Recalculate today's peak", key="prio_recalc",
-                     help="Re-pull CubeAnalytics and overwrite only today's frozen "
-                          "capacity/peak with the current look-back window."):
-            day = picking_store.load_day(warehouse, target_date)
-            cap = _capacity_for_day(site_map, site, target_date)
-            picking_store.save_day(
-                warehouse, target_date, day["df"], day["overlay"],
-                capacity=cap, plan=day["plan"], site=site,
-                keep_existing_capacity=False,
-            )
-            st.rerun()
+    @st.fragment
+    def _pick_and_draw():
+        st.markdown("**Select target date** — shaded days have stored data")
+        target_date = _date_grid_picker(dates, key_prefix=f"prio_cal_{warehouse}")
 
-    view = picking_store.load_day(warehouse, target_date)
-    if view is None:
-        st.warning("Stored day could not be loaded.")
-        return
-    view["site"] = site or view.get("site")
-    ctx = hourly_context_df if hourly_context_df is not None else view["df"]
-    _draw_day_view(view, show_comparison, show_hourly, ctx)
+        if site and target_date == date.today():
+            if st.button("Recalculate today's peak", key="prio_recalc",
+                         help="Re-pull CubeAnalytics and overwrite only today's "
+                              "frozen capacity/peak with the current look-back "
+                              "window."):
+                day = picking_store.load_day(warehouse, target_date)
+                cap = _capacity_for_day(site_map, site, target_date)
+                picking_store.save_day(
+                    warehouse, target_date, day["df"], day["overlay"],
+                    capacity=cap, plan=day["plan"], site=site,
+                    keep_existing_capacity=False,
+                )
+                st.rerun(scope="fragment")
+
+        view = picking_store.load_day(warehouse, target_date)
+        if view is None:
+            st.warning("Stored day could not be loaded.")
+            return
+        view["site"] = site or view.get("site")
+        ctx = hourly_context_df if hourly_context_df is not None else view["df"]
+        _draw_day_view(view, show_comparison, show_hourly, ctx)
+
+    _pick_and_draw()
 
 
 def render():

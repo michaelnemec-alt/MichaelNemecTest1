@@ -16,10 +16,16 @@ services:
       # Peak-memory guard: max concurrent (site × endpoint) fetches. Lower it on
       # a RAM-constrained NAS; raise it for speed on a bigger box.
       CUBE_MAX_CONCURRENT_FETCHES: ${CUBE_MAX_CONCURRENT_FETCHES:-4}
+      # Where the app reads the collector's raw NDJSON store (read-only mount
+      # below). Enables WebSocket-only event types (e.g. CHARGER_STATE) on the
+      # Live data page.
+      RAW_EVENTS_DIR: /collector-data
     volumes:
       # Persist the on-disk @st.cache_data across restarts (Streamlit writes its
       # disk cache under $HOME/.streamlit, i.e. /root/.streamlit in the image).
       - autostore-cache:/root/.streamlit
+      # Read-only view of the collector's raw store (see the collector service).
+      - autostore-raw:/collector-data:ro
     mem_limit: 3g
 
   # Raw live-event collector: streams the WebSocket and backfills the REST
