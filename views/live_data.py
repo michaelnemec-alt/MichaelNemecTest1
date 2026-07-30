@@ -46,74 +46,59 @@ _JOB_SERIES = [
 _ROBOT_SERIES = ["working", "available", "recovery", "unavailable",
                  "charging_available", "charging_unavailable"]
 
+# Robots-by-state stacked column: order is bottom->top and colours mirror the
+# CubeAnalytics portal "state development of robots" view.
+_ROBOT_STACK = [
+    ("available", "Available for work", "#9ecae1"),
+    ("charging_available", "Charging, available for work", "#08519c"),
+    ("working", "Working", "#74c476"),
+    ("charging_unavailable", "Charging, not available for work", "#fd8d3c"),
+    ("recovery", "Recovery", "#969696"),
+    ("unavailable", "Unavailable", "#d62728"),
+]
+
 
 def _line_chart(df, cols, decimals=1):
-    """Line chart with a 24h x-axis. Timestamps are the installation's local
-    wall-clock and tz-naive, so Vega renders them literally (HH:MM) with no
-    browser-timezone shift. Values are rounded to `decimals` so the hover
-    tooltip never shows long floats."""
-    cols = [c for c in cols if c in df.columns]
-    data = df[["ts"] + cols].copy()
-    data[cols] = data[cols].round(decimals)
-    long = data.melt("ts", var_name="series", value_name="value")
-    # A legend with dozens of series (e.g. per-robot battery) is unreadable, so
-    # only show it — with a fixed order — for a small number of series.
-    if len(cols) <= 12:
-        color = alt.Color("series:N", title=None,
-                          sort=cols, scale=alt.Scale(domain=cols))
-    else:
-        color = alt.Color("series:N", legend=None)
-    chart = (
-        alt.Chart(long)
-        .mark_line()
-        .encode(
-            x=alt.X("ts:T", title=None,
-                    axis=alt.Axis(format="%H:%M", labelOverlap=True)),
-            y=alt.Y("value:Q", title=None),
-            color=color,
-            tooltip=[
-                alt.Tooltip("ts:T", title="time", format="%Y-%m-%d %H:%M"),
-                alt.Tooltip("series:N", title="series"),
-                alt.Tooltip("value:Q", title="value"),
-            ],
-        )
-        .properties(height=300)
-        .configure_axisX(labelAngle=0)
-    )
-    st.altair_chart(chart, use_container_width=True)
+    """Native Streamlit line chart (keeps fullscreen/hover). Values are rounded
+    to `decimals` so the hover tooltip never shows long floats."""
+    data = df.set_index("ts")[[c for c in cols if c in df.columns]].round(decimals)
+    st.line_chart(data)
 
 
 def _bar_chart(series):
     st.bar_chart(series.round(0))
 
 
-def _stacked_bar_chart(df, cols, decimals=1):
-    """Stacked column chart over a 24h local-time x-axis (5-min buckets). The
-    stack order follows `cols`; tz-naive timestamps render literally (no
-    browser-timezone shift)."""
-    cols = [c for c in cols if c in df.columns]
-    data = df[["ts"] + cols].copy()
-    data[cols] = data[cols].round(decimals)
-    long = data.melt("ts", var_name="series", value_name="value")
-    order = {c: i for i, c in enumerate(cols)}
-    long["order"] = long["series"].map(order)
+def _robot_state_bar(df, stack):
+    """Stacked column of robots-by-state. `stack` is a list of
+    (column, label, colour) bottom->top. Uses Altair so both the colours and
+    the stack order are fixed (native st.bar_chart sorts them alphabetically).
+    tz-naive timestamps render literally on a 24h axis."""
+    cols = [col for col, _, _ in stack]
+    labels = [label for _, label, _ in stack]
+    colours = [colour for _, _, colour in stack]
+    data = df[["ts"] + cols].copy().round(1)
+    data.columns = ["ts"] + labels
+    long = data.melt("ts", var_name="state", value_name="robots")
+    order = {label: i for i, label in enumerate(labels)}
+    long["order"] = long["state"].map(order)
     chart = (
         alt.Chart(long)
         .mark_bar()
         .encode(
             x=alt.X("ts:T", title=None,
                     axis=alt.Axis(format="%H:%M", labelOverlap=True)),
-            y=alt.Y("value:Q", title=None, stack=True),
-            color=alt.Color("series:N", title=None,
-                            sort=cols, scale=alt.Scale(domain=cols)),
+            y=alt.Y("robots:Q", title=None, stack=True),
+            color=alt.Color("state:N", title=None, sort=labels,
+                            scale=alt.Scale(domain=labels, range=colours)),
             order=alt.Order("order:Q", sort="ascending"),
             tooltip=[
                 alt.Tooltip("ts:T", title="time", format="%Y-%m-%d %H:%M"),
-                alt.Tooltip("series:N", title="series"),
-                alt.Tooltip("value:Q", title="value"),
+                alt.Tooltip("state:N", title="state"),
+                alt.Tooltip("robots:Q", title="robots"),
             ],
         )
-        .properties(height=300)
+        .properties(height=320)
         .configure_axisX(labelAngle=0)
     )
     st.altair_chart(chart, use_container_width=True)
@@ -193,7 +178,16 @@ def _render_robots(inst_id, label):
     c3.metric("Avg battery %", round(float(d["battery_avg"].mean()), 1)
               if d["battery_avg"].notna().any() else 0)
     st.markdown("**Robots by state — avg concurrent (5-min)**")
-    _stacked_bar_chart(d, [c for c in _ROBOT_SERIES if c in d.columns])
+    present = [(col, label, color) for col, label, color in _ROBOT_STACK
+               if col in d.columns]
+    labels = [label for _, label, _ in present]
+    picked = st.multiselect(
+        "States to show", labels, default=labels, key="live_robot_states")
+    stack = [t for t in present if t[1] in picked]
+    if stack:
+        _robot_state_bar(d, stack)
+    else:
+        st.info("Select at least one state to show.")
     if d["battery_avg"].notna().any():
         st.markdown("**Average fleet battery % (5-min)**")
         _line_chart(d, ["battery_avg"])
