@@ -294,16 +294,18 @@ def _maxcap_hourly(df_wait_window, quantile=0.95):
 
 
 def _theomax_flat(df_wait, target_date, df_robot_hourly, util_min=0.6, q=0.95):
-    """Flat throughput ceiling = peak per-robot productivity x workable fleet.
+    """Hourly throughput ceiling = peak per-robot productivity x available fleet.
 
     Per-robot productivity drops off-peak because idle robots queue at ports, so
-    the ceiling is the sustainable peak: the q-quantile of hourly
+    the peak rate is the sustainable one: the q-quantile of hourly
     bins / working-robots over hours busy enough (utilisation >= util_min) to
-    reflect real throughput. The fleet it scales to excludes robots kept off
-    work by charging (charging_unavailable) since batteries must recharge under
-    load; robots down for service/maintenance are NOT excluded (a facility
-    issue, not a capacity limit of the system). Returns a constant 24-slot list
-    (0 when robot-state is unavailable).
+    reflect real throughput. That peak rate is scaled per hour by the robots
+    actually available that hour = fleet minus robots kept off work by charging
+    (charging_unavailable), since batteries must recharge under load; robots
+    down for service/maintenance are NOT excluded (a facility issue, not a
+    capacity limit of the system). The line therefore follows the available
+    fleet across the day. Returns a 24-slot list (0 when robot-state is
+    unavailable that hour).
     """
     out = [0.0] * 24
     if (df_robot_hourly is None or df_robot_hourly.empty
@@ -328,11 +330,17 @@ def _theomax_flat(df_wait, target_date, df_robot_hourly, util_min=0.6, q=0.95):
     if good.empty:
         return out
     peak_rate = float(good["rate"].quantile(q))
-    busy = good[good["_d"] == target_date]
-    if busy.empty:
-        busy = good
-    workable = (busy["total_s"] - busy["charging_unavailable_s"]) / 3600.0
-    return [peak_rate * float(workable.median())] * 24
+    day = rob[rob["_d"] == target_date]
+    if day.empty:
+        return out
+    avail_by_hour = (
+        (day["total_s"] - day["charging_unavailable_s"]) / 3600.0
+    )
+    avail_by_hour.index = day["_h"]
+    for h in range(24):
+        if h in avail_by_hour.index:
+            out[h] = peak_rate * float(avail_by_hour.loc[h])
+    return out
 
 
 def _capacity_arrays(df_wait_day, target_date, df_wait_window=None,
@@ -527,8 +535,8 @@ def _overlay_capacity(ax, cap, base_date):
                      label="Bin presentations / hour (total)")
     if theomax is not None and any(theomax):
         tm = [v if v else float("nan") for v in theomax]
-        ax_bins.plot(x_num, tm, color="#7d3cc7", linewidth=1.8, linestyle="--",
-                     label="Theoretical max / hour (peak productivity x fleet less charging)")
+        ax_bins.plot(x_num, tm, color="#7d3cc7", linewidth=1.8,
+                     label="Theoretical max / hour (peak productivity x available robots/hour)")
     ax_bins.plot(x_num, bins, color="#111111", linewidth=2, marker="o",
                  markersize=3.5, label="Bins picked / hour (cat 1+2)")
     ax_bins.set_ylim(*_aligned_ylim(bins_top))
