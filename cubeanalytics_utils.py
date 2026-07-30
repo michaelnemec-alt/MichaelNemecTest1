@@ -1038,3 +1038,108 @@ def query_module_versions(installation_id, date_from_str, date_to_str):
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
+
+
+# --- Live event stream (BIN_AND_TASK / ROBOT_STATE, last ~48h, 5-min) ------
+# Unlike the daily REST endpoints, live-events-stream is a short-retention
+# repository of the WebSocket events: only the last 48h (lastHours) or a max
+# 3-day window is available, so this is a rolling live view, not history. The
+# response is a bare JSON list of events (no results/next pagination wrapper).
+
+# Robot state buckets we surface as "avg concurrent robots" per 5-min window.
+_ROBOT_STATE_KEYS = (
+    "working", "available", "recovery", "unavailable",
+    "charging_available", "charging_unavailable",
+    "service_on_grid", "service_off_grid",
+)
+
+# TTL kept short: live data changes every 5 min, so caching longer would show
+# stale charts. Bound entries like the other queries.
+_LIVE_TTL_SECONDS = int(os.environ.get("CUBE_LIVE_TTL_SECONDS", "300"))
+
+
+def _parse_live_ts(raw):
+    """Parse local_installation_timestamp keeping the installation's local
+    wall-clock. All events from one installation share the same UTC offset, so
+    parsing tz-aware then dropping the tz yields the local time directly. Falls
+    back to UTC if offsets are mixed (e.g. a DST change within the window)."""
+    ts = pd.to_datetime(raw, errors="coerce")
+    if isinstance(ts.dtype, pd.DatetimeTZDtype):
+        return ts.dt.tz_localize(None)
+    # Mixed offsets -> object dtype; normalise via UTC so it stays sortable.
+    return pd.to_datetime(raw, errors="coerce", utc=True).dt.tz_localize(None)
+
+
+def _fetch_live_events(installation_id, last_hours, event_type):
+    url = f"{BASE_URL}/installations/{installation_id}/live-events-stream/"
+    params = {"lastHours": int(last_hours), "eventType": event_type}
+    resp = _session().get(url, headers=_headers(), params=params, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+    # Bare list of events; the docs note the final item may hold missing
+    # sequence numbers rather than an event, so keep only real events.
+    if not isinstance(data, list):
+        return []
+    return [e for e in data if isinstance(e, dict) and e.get("event_type") == event_type]
+
+
+@st.cache_data(ttl=_LIVE_TTL_SECONDS, max_entries=_CACHE_MAX_ENTRIES)
+def query_live_jobs(installation_id, last_hours=48):
+    """Bin-and-task job counts per 5-min live event for one installation.
+
+    Columns: ts (tz-aware), created, updated, deleted, completed, active,
+    total, unique, total_prepared, unique_prepared. Rolling last ~48h only.
+    """
+    fields = ("active", "total", "unique", "total_prepared", "unique_prepared",
+              "created", "updated", "deleted", "completed")
+    rows = []
+    for e in _fetch_live_events(installation_id, last_hours, "BIN_AND_TASK"):
+        d = e.get("data", {})
+        row = {"ts": e.get("local_installation_timestamp")}
+        for f in fields:
+            row[f] = d.get(f, 0)
+        rows.append(row)
+    df = pd.DataFrame(rows, columns=["ts", *fields])
+    if not df.empty:
+        df["ts"] = _parse_live_ts(df["ts"])
+        df = df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    return df
+
+
+@st.cache_data(ttl=_LIVE_TTL_SECONDS, max_entries=_CACHE_MAX_ENTRIES)
+def query_live_robots(installation_id, last_hours=48):
+    """Robot activity per 5-min live event for one installation.
+
+    Each state column is the average number of robots concurrently in that
+    state during the window (sum of per-robot seconds in state / window span).
+    battery_avg is the mean battery % across robots. Rolling last ~48h only.
+    """
+    rows = []
+    for e in _fetch_live_events(installation_id, last_hours, "ROBOT_STATE"):
+        robots = e.get("data", {}).get("robots", [])
+        if not robots:
+            continue
+        span = 0
+        totals = {k: 0.0 for k in _ROBOT_STATE_KEYS}
+        batteries = []
+        for r in robots:
+            sts = r.get("state_time_span_seconds", {})
+            span = max(span, sum(v for v in sts.values() if isinstance(v, (int, float))))
+            for k in _ROBOT_STATE_KEYS:
+                totals[k] += sts.get(k, 0) or 0
+            b = r.get("battery")
+            if b is not None:
+                batteries.append(b)
+        span = span or 300
+        row = {"ts": e.get("local_installation_timestamp"),
+               "robots": len(robots),
+               "battery_avg": sum(batteries) / len(batteries) if batteries else None}
+        for k in _ROBOT_STATE_KEYS:
+            row[k] = totals[k] / span
+        rows.append(row)
+    cols = ["ts", "robots", "battery_avg", *_ROBOT_STATE_KEYS]
+    df = pd.DataFrame(rows, columns=cols)
+    if not df.empty:
+        df["ts"] = _parse_live_ts(df["ts"])
+        df = df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    return df

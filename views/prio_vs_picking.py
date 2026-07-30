@@ -10,7 +10,10 @@ from datetime import date, timedelta
 
 import picking_store
 from snowflake_utils import is_snowflake_configured, get_available_warehouses, query_picking_data
-from cubeanalytics_utils import is_api_configured, get_installations, query_port_wait_time
+from cubeanalytics_utils import (
+    is_api_configured, get_installations, query_port_wait_time,
+    query_live_jobs, query_live_robots,
+)
 
 
 def _generate_chart(data, autostore_num, warehouse_name, hourly_overlay=None,
@@ -803,6 +806,147 @@ def _date_grid_picker(dates, key_prefix):
     return st.session_state[sel_key]
 
 
+def _live_time_axis(ax, ts):
+    """Format an x-axis of tz-aware live timestamps as day+hour, local wall-clock."""
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%a %H:%M"))
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=4))
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+    if len(ts) > 1:
+        ax.set_xlim(ts.iloc[0], ts.iloc[-1])
+
+
+def _draw_live_test_section(site_map, site, last_hours=48):
+    """AS91 live test charts from the CubeAnalytics live event stream (~48h, 5-min).
+
+    Three stacked charts: (1) robots working vs available, (2) job counts, and
+    (3) average fleet battery %. This is live/rolling data (short retention), so
+    it is independent of the uploaded-CSV calendar date.
+    """
+    st.divider()
+    st.markdown("### AutoStore 91 — live test (last 48h, 5-min)")
+    st.caption("Test charts from the CubeAnalytics live event stream. This is "
+               "rolling live data (only the last ~48 hours are available), so "
+               "it is independent of the selected history date. Times are the "
+               "installation's local wall-clock.")
+
+    inst_id = site_map.get(site, {}).get(_AS_ENV[91]) if site else None
+    if not inst_id:
+        st.info(f"No CubeAnalytics {_AS_ENV[91]} (AS91) installation for site "
+                f"'{site}' — live test charts unavailable.")
+        return
+
+    with st.spinner("Loading live event stream (AS91)..."):
+        try:
+            jobs = query_live_jobs(inst_id, last_hours)
+            robots = query_live_robots(inst_id, last_hours)
+        except Exception as e:
+            st.error(f"Live event stream query failed: {e}")
+            return
+
+    if robots.empty and jobs.empty:
+        st.warning("No live events available for this installation (live data may "
+                   "not be enabled).")
+        return
+
+    # Chart 1 — robots working vs available.
+    if not robots.empty:
+        fig1, ax = plt.subplots(figsize=(24, 6), dpi=130)
+        fig1.patch.set_facecolor("white")
+        ax.set_facecolor("#f8f8f8")
+        ax.grid(True, alpha=0.3, color="#cccccc")
+        ax.fill_between(robots["ts"], robots["working"], color="#2ca02c",
+                        alpha=0.25)
+        ax.plot(robots["ts"], robots["working"], color="#2ca02c", linewidth=2,
+                label="Robots working")
+        ax.plot(robots["ts"], robots["available"], color="#1f77b4", linewidth=2,
+                label="Robots available")
+        ax.plot(robots["ts"], robots["robots"], color="#999999", linewidth=1.2,
+                linestyle="--", label="Robots online (total)")
+        ax.set_ylabel("Avg concurrent robots", fontsize=13)
+        ax.set_ylim(bottom=0)
+        ax.set_title("AS91 — Robots working vs available (live 48h)",
+                     fontsize=15, fontweight="bold")
+        ax.legend(loc="upper left", fontsize=11, framealpha=0.9)
+        _live_time_axis(ax, robots["ts"])
+        fig1.tight_layout()
+        st.pyplot(fig1)
+        st.download_button("Download PNG — AS91 robots (live)",
+                           data=_fig_to_bytes(fig1),
+                           file_name="as91_live_robots.png", mime="image/png",
+                           key="dl_live_robots")
+        plt.close(fig1)
+
+    # Chart 2 — job counts.
+    if not jobs.empty:
+        fig2, ax = plt.subplots(figsize=(24, 6), dpi=130)
+        fig2.patch.set_facecolor("white")
+        ax.set_facecolor("#f8f8f8")
+        ax.grid(True, alpha=0.3, color="#cccccc")
+        series = [
+            ("total", "#111111", "Total jobs"),
+            ("active", "#2ca02c", "Active jobs"),
+            ("unique", "#17becf", "Unique jobs"),
+            ("total_prepared", "#9467bd", "Prepared jobs"),
+            ("unique_prepared", "#c5b0d5", "Unique prepared"),
+            ("created", "#ff7f0e", "Created (per 5 min)"),
+            ("completed", "#1f77b4", "Completed (per 5 min)"),
+            ("updated", "#8c564b", "Updated (per 5 min)"),
+            ("deleted", "#d62728", "Deleted (per 5 min)"),
+        ]
+        for col, color, label in series:
+            ax.plot(jobs["ts"], jobs[col], color=color, linewidth=1.6, label=label)
+        ax.set_ylabel("# jobs", fontsize=13)
+        ax.set_ylim(bottom=0)
+        ax.set_title("AS91 — Jobs in the system (live 48h, 5-min)",
+                     fontsize=15, fontweight="bold")
+        ax.legend(loc="upper left", fontsize=10, framealpha=0.9, ncol=3)
+        _live_time_axis(ax, jobs["ts"])
+        fig2.tight_layout()
+        st.pyplot(fig2)
+        st.download_button("Download PNG — AS91 jobs (live)",
+                           data=_fig_to_bytes(fig2),
+                           file_name="as91_live_jobs.png", mime="image/png",
+                           key="dl_live_jobs")
+        plt.close(fig2)
+
+    # Chart 3 — average fleet battery %.
+    if not robots.empty and robots["battery_avg"].notna().any():
+        fig3, ax = plt.subplots(figsize=(24, 5), dpi=130)
+        fig3.patch.set_facecolor("white")
+        ax.set_facecolor("#f8f8f8")
+        ax.grid(True, alpha=0.3, color="#cccccc")
+        ax.fill_between(robots["ts"], robots["battery_avg"], color="#e8a33d",
+                        alpha=0.2)
+        ax.plot(robots["ts"], robots["battery_avg"], color="#e8871e",
+                linewidth=2, label="Avg fleet battery %")
+        ax.set_ylabel("Battery %", fontsize=13)
+        ax.set_ylim(0, 100)
+        ax.set_title("AS91 — Average robot fleet battery % (live 48h)",
+                     fontsize=15, fontweight="bold")
+        ax.legend(loc="upper left", fontsize=11, framealpha=0.9)
+        _live_time_axis(ax, robots["ts"])
+        fig3.tight_layout()
+        st.pyplot(fig3)
+        st.download_button("Download PNG — AS91 battery (live)",
+                           data=_fig_to_bytes(fig3),
+                           file_name="as91_live_battery.png", mime="image/png",
+                           key="dl_live_battery")
+        plt.close(fig3)
+
+
+def _maybe_live_test(show_live_test, warehouse):
+    """Render the AS91 live test section, resolving the CubeAnalytics site from
+    the warehouse code. Independent of the capacity overlay and history date."""
+    if not show_live_test:
+        return
+    if not is_api_configured():
+        st.info("CubeAnalytics API not configured — AS91 live test unavailable.")
+        return
+    site_map = _installation_site_map()
+    site = _default_capacity_site(site_map, warehouse)
+    _draw_live_test_section(site_map, site)
+
+
 def _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
                        site_map, site, hourly_context_df=None):
     """Date-pick and render one stored day; offer to recalculate today's peak."""
@@ -890,6 +1034,14 @@ def render():
                  "and bins picked/hour (line) for pick tasks category 1+2, "
                  "using the same CubeAnalytics source as UNIFY Pivot Ready.",
         )
+        show_live_test = st.checkbox(
+            "Show AS91 live test (48h)",
+            value=False,
+            key="prio_live_test",
+            help="Adds three test charts for AutoStore 91 from the CubeAnalytics "
+                 "live event stream (robots working/available, jobs, fleet "
+                 "battery %). Live/rolling data — only the last ~48h, 5-min.",
+        )
 
     if data_source == "Saved history":
         # Frozen capacity is read from disk, so no site picker here. The site is
@@ -900,6 +1052,7 @@ def render():
             site = _default_capacity_site(site_map, hist_wh)
         _render_from_store(hist_wh, show_comparison, show_hourly, show_capacity,
                            site_map, site)
+        _maybe_live_test(show_live_test, hist_wh)
         return
 
     if data_source == "Snowflake":
@@ -942,6 +1095,7 @@ def render():
             "plan": plan_by_date.get(target_date), "site": site,
         }
         _draw_day_view(view, show_comparison, show_hourly, df)
+        _maybe_live_test(show_live_test, warehouse)
         return
 
     # CSV Upload
@@ -1002,3 +1156,4 @@ def render():
 
     _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
                        site_map, site)
+    _maybe_live_test(show_live_test, warehouse)
