@@ -16,6 +16,21 @@ header[data-testid="stHeader"] { background: white; box-shadow: 0 1px 3px rgba(0
 .block-container { padding-top: 0.5rem; max-width: 1380px; }
 [data-testid="stPlotlyChart"] { margin-bottom: -20px; }
 
+/* Tighter vertical rhythm: charts / labels sit closer together. */
+[data-testid="stVerticalBlock"] { gap: 0.55rem; }
+[data-testid="stElementContainer"] { margin-bottom: 0 !important; }
+hr, [data-testid="stDivider"] { margin: 0.55rem 0 !important; }
+/* Bold markdown labels used as chart titles -> compact section headers. */
+[data-testid="stMarkdown"] p { margin-bottom: 0.15rem; }
+[data-testid="stMarkdown"] strong {
+    font-size: 0.9rem; color: #374151;
+}
+/* Trim whitespace above/below charts and around metrics. */
+[data-testid="stVegaLiteChart"], [data-testid="stArrowVegaLiteChart"] { margin-bottom: 0; }
+[data-testid="stMetric"] { padding: 2px 0; }
+[data-testid="stMetricValue"] { font-size: 1.6rem; }
+[data-testid="stMetricLabel"] p { font-size: 0.72rem; color: #9ca3af; }
+
 section[data-testid="stSidebar"] { background-color: #fafafa; border-right: 1px solid #f0f0f0; }
 section[data-testid="stSidebar"] button {
     font-size: 10px !important; padding: 4px 8px !important; min-height: 0 !important;
