@@ -1137,7 +1137,11 @@ def render():
             sources.append("Saved history")
         if sf_available:
             sources.append("Snowflake")
-        data_source = st.radio("Data source", sources, index=0, key="prio_ds")
+        default_source = ("Saved history" if "Saved history" in sources
+                          else sources[0])
+        data_source = st.radio("Data source", sources,
+                               index=sources.index(default_source),
+                               key="prio_ds")
 
         uploaded_file = plan_file = hist_wh = None
         sf_warehouse = sf_date_from = sf_date_to = None

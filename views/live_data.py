@@ -77,11 +77,21 @@ def _robot_state_bar(df, stack):
     cols = [col for col, _, _ in stack]
     labels = [label for _, label, _ in stack]
     colours = [colour for _, _, colour in stack]
+    # Fleet total per timestamp = sum across every state present (not just the
+    # picked ones), so the share is always relative to the whole fleet.
+    all_cols = [c for c, _, _ in _ROBOT_STACK if c in df.columns]
+    totals = df.set_index("ts")[all_cols].sum(axis=1)
     data = df[["ts"] + cols].copy().round(1)
     data.columns = ["ts"] + labels
     long = data.melt("ts", var_name="state", value_name="robots")
     order = {label: i for i, label in enumerate(labels)}
     long["order"] = long["state"].map(order)
+    total_by_ts = long["ts"].map(totals)
+    share = (long["robots"] / total_by_ts.replace(0, pd.NA) * 100)
+    long["value"] = [
+        f"{r:.1f} ({s:.0f}%)" if pd.notna(s) else f"{r:.1f}"
+        for r, s in zip(long["robots"], share)
+    ]
     chart = (
         alt.Chart(long)
         .mark_bar()
@@ -93,14 +103,22 @@ def _robot_state_bar(df, stack):
                             scale=alt.Scale(domain=labels, range=colours)),
             order=alt.Order("order:Q", sort="ascending"),
             tooltip=[
-                alt.Tooltip("ts:T", title="time", format="%Y-%m-%d %H:%M"),
+                alt.Tooltip("ts:T", title="time", format="%H:%M"),
                 alt.Tooltip("state:N", title="state"),
-                alt.Tooltip("robots:Q", title="robots"),
+                alt.Tooltip("value:N", title="robots (%)"),
             ],
         )
         .properties(height=320)
         .configure_axisX(labelAngle=0)
     )
+    # Tighten the Vega tooltip so its rows sit close together and it stays small.
+    st.markdown(
+        "<style>#vg-tooltip-element{font-size:12px!important;padding:4px 6px"
+        "!important}#vg-tooltip-element table{border-spacing:0!important}"
+        "#vg-tooltip-element td{padding:0 4px 0 0!important;line-height:1.15"
+        "!important}#vg-tooltip-element tr>td.key{padding-right:6px!important}"
+        "</style>",
+        unsafe_allow_html=True)
     st.altair_chart(chart, use_container_width=True)
 
 
