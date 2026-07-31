@@ -18,7 +18,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import picking_store as ps
-from views.prio_vs_picking import _compute_overlay
+from views.prio_vs_picking import _compute_overlay, _capacity_kpis
 
 
 def _with_store(fn):
@@ -109,6 +109,26 @@ def test_compute_overlay_prepick_vs_sameday():
     assert ov["sameday"][10] == 2
     assert ov["prepick"][10] == 1
     assert sum(ov["sameday"]) == 2 and sum(ov["prepick"]) == 1
+
+
+def test_capacity_kpis():
+    # ceiling known for 2 hours (100+100); picked 60+100 -> lost 40, util 80%.
+    theomax = [0.0] * 24
+    bins = [0.0] * 24
+    theomax[8], theomax[9] = 100.0, 100.0
+    bins[8], bins[9] = 60.0, 100.0
+    kpi = _capacity_kpis({"theomax": theomax, "bins": bins})
+    assert kpi["hours"] == 2
+    assert kpi["picked"] == 160.0
+    assert kpi["ceiling"] == 200.0
+    assert kpi["potential_lost"] == 40.0
+    assert round(kpi["utilisation"], 1) == 80.0
+    # over-performance in an hour does not create negative lost.
+    kpi2 = _capacity_kpis({"theomax": [50.0], "bins": [70.0]})
+    assert kpi2["potential_lost"] == 0.0
+    # no known ceiling -> None.
+    assert _capacity_kpis({"theomax": [0.0, 0.0], "bins": [5.0, 5.0]}) is None
+    assert _capacity_kpis(None) is None
 
 
 def test_missing_day_returns_none():

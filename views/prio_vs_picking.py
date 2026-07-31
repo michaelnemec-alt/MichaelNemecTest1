@@ -369,6 +369,37 @@ def _capacity_arrays(df_wait_day, target_date, df_wait_window=None,
     }
 
 
+def _capacity_kpis(cap):
+    """Day KPIs from the hourly ceiling vs actual bins picked.
+
+    Only hours where the theoretical ceiling is known (robot-state available,
+    theomax > 0) are counted. `potential_lost` = the bins that could have been
+    picked at peak productivity with the fleet that was actually available but
+    were not — i.e. unrealised picking capacity for the day. `utilisation` is
+    actual / ceiling over those hours.
+    """
+    theomax = (cap or {}).get("theomax") or []
+    bins = (cap or {}).get("bins") or []
+    picked = ceiling = lost = 0.0
+    hours = 0
+    for tm, b in zip(theomax, bins):
+        if not tm:
+            continue
+        hours += 1
+        picked += b or 0.0
+        ceiling += tm
+        lost += max(0.0, tm - (b or 0.0))
+    if hours == 0 or ceiling <= 0:
+        return None
+    return {
+        "picked": picked,
+        "ceiling": ceiling,
+        "potential_lost": lost,
+        "utilisation": picked / ceiling * 100.0,
+        "hours": hours,
+    }
+
+
 def _capacity_chart(df_wait, autostore_num, warehouse_name, target_date, site_name, ax=None):
     """Combo chart mirroring 'AS Max capacity utilization':
 
@@ -786,6 +817,19 @@ def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df):
             fig = _generate_chart(scatter, num, warehouse,
                                   hourly_overlay=ov, plan_planned=plan)
         st.pyplot(fig)
+        kpi = _capacity_kpis(cap) if cap else None
+        if kpi:
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Bins picked (cap. hours)", f"{kpi['picked']:,.0f}")
+            k2.metric("Theoretical ceiling", f"{kpi['ceiling']:,.0f}")
+            k3.metric("Potential lost", f"{kpi['potential_lost']:,.0f}",
+                      help="Bins that could have been picked at peak "
+                           "productivity with the fleet actually available "
+                           "that hour, but were not (unrealised capacity). "
+                           "Summed over hours where the ceiling is known.")
+            k4.metric("Capacity utilisation", f"{kpi['utilisation']:.0f}%",
+                      help="Bins picked / theoretical ceiling over the "
+                           f"{kpi['hours']} hours with a known ceiling.")
         st.download_button(f"Download PNG — AS{num}", data=_fig_to_bytes(fig),
                            file_name=f"prio_vs_picking_{warehouse}_as{num}.png",
                            mime="image/png", key=f"dl_{num}")
