@@ -1,5 +1,6 @@
 """CubeAnalytics API helpers."""
 
+import hashlib
 import json
 import os
 import re
@@ -71,17 +72,29 @@ def _session():
     return s
 
 
+def _token():
+    """Current CubeAnalytics API token from secrets, or '' when absent."""
+    try:
+        return st.secrets["cubeanalytics"]["token"] or ""
+    except (KeyError, FileNotFoundError):
+        return ""
+
+
+def _token_fingerprint():
+    """Short, non-reversible hash of the token, used only as a cache key so a
+    token swap (e.g. broader site access) invalidates token-scoped caches like
+    the installation list instead of serving the previous token's result."""
+    tok = _token()
+    return hashlib.sha256(tok.encode()).hexdigest()[:12] if tok else ""
+
+
 def is_api_configured():
     """Return True when a CubeAnalytics API token is present in secrets."""
-    try:
-        return bool(st.secrets["cubeanalytics"]["token"])
-    except (KeyError, FileNotFoundError):
-        return False
+    return bool(_token())
 
 
 def _headers():
-    token = st.secrets["cubeanalytics"]["token"]
-    return {"API-Authorization": f"Token {token}"}
+    return {"API-Authorization": f"Token {_token()}"}
 
 
 # Installations whose name contains any of these (case-insensitive) are hidden
@@ -95,12 +108,10 @@ _EXCLUDE_INSTALLATIONS = [
 
 
 @st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
-def get_installations():
-    """Fetch the list of installations the token has access to.
-
-    Returns a list of dicts with keys: id, name, city, country. Excludes
-    installations matching _EXCLUDE_INSTALLATIONS (e.g. the demo site).
-    """
+def _get_installations_cached(token_fp):
+    """Token-scoped installation fetch. `token_fp` is only a cache key (see
+    _token_fingerprint) so switching tokens returns the new token's sites."""
+    del token_fp  # used solely as the cache key
     resp = _session().get(f"{BASE_URL}/installations/", headers=_headers(), timeout=30)
     resp.raise_for_status()
     data = resp.json()
@@ -116,6 +127,16 @@ def get_installations():
             "country": r.get("country", ""),
         })
     return installations
+
+
+def get_installations():
+    """Installations the current token can access (id, name, city, country).
+
+    Excludes _EXCLUDE_INSTALLATIONS (e.g. the demo site). The result is cached
+    per token, so a token change (e.g. gaining more sites) refreshes the list
+    rather than serving the previous token's installations from disk cache.
+    """
+    return _get_installations_cached(_token_fingerprint())
 
 
 # Short-code / common-name aliases for CubeAnalytics sites, matched as a
