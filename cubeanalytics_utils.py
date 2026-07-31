@@ -118,6 +118,37 @@ def get_installations():
     return installations
 
 
+# Short-code / common-name aliases for CubeAnalytics sites, matched as a
+# substring against the installation city or name (case-insensitive). Used to
+# label filters and tables so operators recognise the FC (e.g. the two Pragues:
+# Praha = PRG2, Chrášťany = PRG3).
+_SITE_ALIASES = (
+    ("Bischofsheim", "FRA / Frankfurt"),
+    ("Chrášťany", "PRG3 / Prague 3"),
+    ("Praha", "PRG2 / Prague 2"),
+    ("Garching", "MUC / Munich"),
+    ("Schönefeld", "BER / Berlin"),
+    ("Vienna", "VIE / Vienna"),
+    ("Biatorbágy", "BUD / Budapest"),
+)
+
+
+def site_alias(text):
+    """Short code / common name for a site given its city or installation name,
+    or None when unknown."""
+    low = (text or "").lower()
+    for key, alias in _SITE_ALIASES:
+        if key.lower() in low:
+            return alias
+    return None
+
+
+def site_display_label(text):
+    """`<name> · <alias>` when a short code is known, else the name unchanged."""
+    alias = site_alias(text)
+    return f"{text} · {alias}" if alias else text
+
+
 def _fetch_all_pages(url, params):
     """Follow pagination and collect all results."""
     all_results = []

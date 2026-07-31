@@ -11,8 +11,8 @@ from datetime import date, timedelta
 import picking_store
 from snowflake_utils import is_snowflake_configured, get_available_warehouses, query_picking_data
 from cubeanalytics_utils import (
-    is_api_configured, get_installations, query_port_wait_time,
-    query_port_wait_time_daily,
+    is_api_configured, get_installations, site_display_label,
+    query_port_wait_time, query_port_wait_time_daily,
     query_live_jobs, query_live_robots, query_live_robot_battery,
     query_robot_state_hourly,
 )
@@ -175,7 +175,7 @@ _CAPACITY_MAX_SEC = 10.0
 # is not returned by the API, so no capacity data is shown for them.
 _WAREHOUSE_CITY_HINTS = {
     "prg2": "Praha",
-    "prg3": "Chrášťany",
+    "prg3": "Chrášťany u Prahy",
     "bud": "Biatorbágy",
     "vie": "Vienna",
     "muc": "Garching",
@@ -213,7 +213,14 @@ def _default_capacity_site(sites, warehouse):
     wh = (warehouse or "").lower()
     for hint, city in _WAREHOUSE_CITY_HINTS.items():
         if hint in wh:
-            return city if city in sites else None
+            if city in sites:
+                return city
+            # tolerate small city-name differences (e.g. "Chrášťany" vs
+            # "Chrášťany u Prahy") by matching on a substring either way.
+            for s in sites:
+                if city.lower() in s.lower() or s.lower() in city.lower():
+                    return s
+            return None
     return None
 
 
@@ -759,6 +766,7 @@ def _resolve_cap_site(warehouse, show_capacity):
         "CubeAnalytics site for capacity chart",
         options=site_options,
         index=site_options.index(default_site),
+        format_func=site_display_label,
         key="prio_cap_site",
         help="Which CubeAnalytics installation the hourly Bin/User time and "
              "bins-picked-per-hour data is read from.",
@@ -867,7 +875,8 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
     """
     st.divider()
     weekday = target_date.strftime("%A")
-    st.markdown(f"#### AutoStore capacity KPIs — {weekday}s (last 4 months)")
+    st.markdown(f"#### AutoStore capacity KPIs — {site_display_label(site)} — "
+                f"{weekday}s (last 4 months)")
     with st.spinner(f"Building {weekday} KPI matrix "
                     "(utilisation pulls per-day data — first load is slower, "
                     "then served from disk cache)..."):

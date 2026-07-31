@@ -144,6 +144,19 @@ def test_capacity_kpis():
     assert _capacity_kpis(None) is None
 
 
+def test_site_aliases():
+    from cubeanalytics_utils import site_alias, site_display_label
+
+    # the two Pragues must resolve differently.
+    assert site_alias("Praha") == "PRG2 / Prague 2"
+    assert site_alias("Chrášťany u Prahy") == "PRG3 / Prague 3"
+    assert site_alias("01937-Rohlik-Bischofsheim (Ambient)") == "FRA / Frankfurt"
+    assert site_alias("Garching") == "MUC / Munich"
+    assert site_alias("Nowhere") is None
+    assert site_display_label("Praha") == "Praha · PRG2 / Prague 2"
+    assert site_display_label("Nowhere") == "Nowhere"
+
+
 def test_weekday_kpi_matrix(monkeypatch):
     import views.prio_vs_picking as pvp
 

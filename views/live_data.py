@@ -13,7 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from cubeanalytics_utils import (
-    is_api_configured, get_installations, LIVE_EVENT_TYPES,
+    is_api_configured, get_installations, site_display_label, LIVE_EVENT_TYPES,
     query_live_jobs, query_live_robots, query_live_robot_battery,
     query_live_event_table, query_access_point_load,
 )
@@ -190,31 +190,35 @@ def _render_robots(inst_id, label):
     if d.empty:
         st.info("No events for the selected day.")
         return
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Robots online", int(d["robots"].max()))
-    c2.metric("Avg working", round(float(d["working"].mean()), 1))
-    c3.metric("Avg battery %", round(float(d["battery_avg"].mean()), 1)
-              if d["battery_avg"].notna().any() else 0)
-    st.markdown("**Robots by state — avg concurrent (5-min)**")
-    present = [(col, label, color) for col, label, color in _ROBOT_STACK
-               if col in d.columns]
-    labels = [label for _, label, _ in present]
-    picked = st.multiselect(
-        "States to show", labels, default=labels, key="live_robot_states")
-    stack = [t for t in present if t[1] in picked]
-    if stack:
-        _robot_state_bar(d, stack)
-    else:
-        st.info("Select at least one state to show.")
+    with st.container(border=True):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Robots online", int(d["robots"].max()))
+        c2.metric("Avg working", round(float(d["working"].mean()), 1))
+        c3.metric("Avg battery %", round(float(d["battery_avg"].mean()), 1)
+                  if d["battery_avg"].notna().any() else 0)
+    with st.container(border=True):
+        st.markdown("**Robots by state — avg concurrent (5-min)**")
+        present = [(col, label, color) for col, label, color in _ROBOT_STACK
+                   if col in d.columns]
+        labels = [label for _, label, _ in present]
+        picked = st.multiselect(
+            "States to show", labels, default=labels, key="live_robot_states")
+        stack = [t for t in present if t[1] in picked]
+        if stack:
+            _robot_state_bar(d, stack)
+        else:
+            st.info("Select at least one state to show.")
     if d["battery_avg"].notna().any():
-        st.markdown("**Average fleet battery % (5-min)**")
-        _line_chart(d, ["battery_avg"])
+        with st.container(border=True):
+            st.markdown("**Average fleet battery % (5-min)**")
+            _line_chart(d, ["battery_avg"])
     if not bat.empty:
         bd = _filter_day(bat, day)
         robot_cols = [c for c in bd.columns if c != "ts"]
         if robot_cols:
-            st.markdown(f"**Battery per robot ({len(robot_cols)} robots)**")
-            _line_chart(bd, robot_cols)
+            with st.container(border=True):
+                st.markdown(f"**Battery per robot ({len(robot_cols)} robots)**")
+                _line_chart(bd, robot_cols)
     show = ["ts", "robots", "battery_avg", *[c for c in _ROBOT_SERIES if c in d.columns]]
     with st.expander("Data table + CSV"):
         st.dataframe(d[show], use_container_width=True, hide_index=True)
@@ -357,6 +361,7 @@ def render():
                      for i in sorted(installations, key=lambda x: x["name"])}
     col_site, col_evt = st.columns([2, 1])
     site_label = col_site.selectbox("Site", list(inst_by_label.keys()),
+                                    format_func=site_display_label,
                                     key="live_site")
     event_type = col_evt.selectbox(
         "Event type", _EVENT_TYPES,
