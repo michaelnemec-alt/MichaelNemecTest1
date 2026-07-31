@@ -169,15 +169,21 @@ def test_weekday_kpi_matrix(monkeypatch):
     res = _weekday_kpi_matrix(site_map, "WH", target, months=3, with_util=False)
     assert res is not None
     df, best_dates = res
-    # only Fridays (no Tuesday), one row per Friday.
+    # only Fridays (no Tuesday), one row per Friday; index carries weekday abbr.
     assert len(df) == len(fridays)
-    assert all(date.fromisoformat(i).weekday() == 4 for i in df.index)
-    best_iso = (target - timedelta(days=7)).isoformat()
+    assert all(i.startswith("Fri ") for i in df.index)
+    assert all(date.fromisoformat(i.split()[1]).weekday() == 4 for i in df.index)
+
+    def _lbl(d):
+        return f"{d.strftime('%a')} {d.isoformat()}"
+
+    best_lbl = _lbl(target - timedelta(days=7))
+    tgt_lbl = _lbl(target)
     assert best_dates[91] == target - timedelta(days=7)
     # best Friday -> 0% lost; today (300/500) -> 40% lost.
-    assert round(df.loc[best_iso, ("AS91", "Lost %")], 1) == 0.0
-    assert round(df.loc[target.isoformat(), ("AS91", "Lost %")], 1) == 40.0
-    assert df.loc[target.isoformat(), ("AS91", "Picks 1+2")] == 300.0
+    assert round(df.loc[best_lbl, ("AS91", "Lost %")], 1) == 0.0
+    assert round(df.loc[tgt_lbl, ("AS91", "Lost %")], 1) == 40.0
+    assert df.loc[tgt_lbl, ("AS91", "Picks 1+2")] == 300.0
 
     # no installation mapping -> None.
     assert _weekday_kpi_matrix({}, "WH", target, with_util=False) is None

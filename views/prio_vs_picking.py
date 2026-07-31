@@ -483,7 +483,7 @@ def _weekday_kpi_matrix(site_map, site, target_date, months=4, with_util=True):
     df = df.reindex(columns=pd.MultiIndex.from_tuples(
         [(f"AS{n}", m) for n in (91, 92)
          for m in ("Util %", "Picks 1+2", "Lost %")]))
-    df.index = [d.isoformat() for d in days]
+    df.index = [f"{d.strftime('%a')} {d.isoformat()}" for d in days]
     return df, {num: best_date.get(num) for num in (91, 92)}
 
 
@@ -876,8 +876,12 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
         st.info("No comparable same-weekday history for capacity KPIs.")
         return
     df, best_dates = res
-    tgt = target_date.isoformat()
-    best_rows = {num: (d.isoformat() if d else None)
+
+    def _label(d):
+        return f"{d.strftime('%a')} {d.isoformat()}"
+
+    tgt = _label(target_date)
+    best_rows = {num: (_label(d) if d else None)
                  for num, d in best_dates.items()}
 
     fmt = {}
