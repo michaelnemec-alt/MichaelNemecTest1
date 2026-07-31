@@ -174,9 +174,9 @@ def _render_jobs(inst_id, label):
     _line_chart(d, ["total", "active", "unique", "total_prepared", "unique_prepared"])
     st.markdown("**Job flow per 5-min (created / completed / updated / deleted)**")
     _line_chart(d, ["created", "completed", "updated", "deleted"])
-    st.markdown("**Data**")
-    st.dataframe(d[["ts", *_JOB_SERIES]], use_container_width=True, hide_index=True)
-    _download(d[["ts", *_JOB_SERIES]], f"{label}_jobs.csv", "dl_live_jobs_page")
+    with st.expander("Data table + CSV"):
+        st.dataframe(d[["ts", *_JOB_SERIES]], use_container_width=True, hide_index=True)
+        _download(d[["ts", *_JOB_SERIES]], f"{label}_jobs.csv", "dl_live_jobs_page")
 
 
 def _render_robots(inst_id, label):
@@ -215,10 +215,10 @@ def _render_robots(inst_id, label):
         if robot_cols:
             st.markdown(f"**Battery per robot ({len(robot_cols)} robots)**")
             _line_chart(bd, robot_cols)
-    st.markdown("**Data**")
     show = ["ts", "robots", "battery_avg", *[c for c in _ROBOT_SERIES if c in d.columns]]
-    st.dataframe(d[show], use_container_width=True, hide_index=True)
-    _download(d[show], f"{label}_robots.csv", "dl_live_robots_page")
+    with st.expander("Data table + CSV"):
+        st.dataframe(d[show], use_container_width=True, hide_index=True)
+        _download(d[show], f"{label}_robots.csv", "dl_live_robots_page")
 
 
 def _render_generic(inst_id, event_type, label):
@@ -238,9 +238,9 @@ def _render_generic(inst_id, event_type, label):
     c2.metric("Distinct 5-min buckets", int((counts > 0).sum()))
     st.markdown("**Records per 5-min**")
     _bar_chart(counts)
-    st.markdown("**Data**")
-    st.dataframe(d, use_container_width=True, hide_index=True)
-    _download(d, f"{label}_{event_type.lower()}.csv", f"dl_live_{event_type}_page")
+    with st.expander("Data table + CSV"):
+        st.dataframe(d, use_container_width=True, hide_index=True)
+        _download(d, f"{label}_{event_type.lower()}.csv", f"dl_live_{event_type}_page")
 
 
 def _render_chargers(inst_id, label):
@@ -302,9 +302,9 @@ def _render_chargers(inst_id, label):
         snap[["charger_id", "charger_type", "state", "temp_max", *_CHARGER_STATES]]
         .sort_values("charger_id"),
         use_container_width=True, hide_index=True)
-    st.markdown("**Data (5-min, per charger)**")
-    st.dataframe(d, use_container_width=True, hide_index=True)
-    _download(d, f"{label}_charger_state.csv", "dl_live_charger_page")
+    with st.expander("Data (5-min, per charger) + CSV"):
+        st.dataframe(d, use_container_width=True, hide_index=True)
+        _download(d, f"{label}_charger_state.csv", "dl_live_charger_page")
 
 
 def _render_access_point_load(inst_id, label):
@@ -329,9 +329,9 @@ def _render_access_point_load(inst_id, label):
     st.markdown("**Peak load per access point (hourly)**")
     peak = d.pivot_table(index="ts", columns="ap_id", values="peak_ap_load", aggfunc="max")
     _line_chart(peak.reset_index(), list(peak.columns))
-    st.markdown("**Data**")
-    st.dataframe(d, use_container_width=True, hide_index=True)
-    _download(d, f"{label}_access_point_load.csv", "dl_live_apl_page")
+    with st.expander("Data table + CSV"):
+        st.dataframe(d, use_container_width=True, hide_index=True)
+        _download(d, f"{label}_access_point_load.csv", "dl_live_apl_page")
 
 
 def render():
