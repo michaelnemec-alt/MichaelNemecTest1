@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import picking_store as ps
 from views.prio_vs_picking import (
-    _compute_overlay, _capacity_kpis, _potential_lost_weekday,
+    _compute_overlay, _capacity_kpis, _weekday_kpi_matrix,
 )
 
 
@@ -144,42 +144,47 @@ def test_capacity_kpis():
     assert _capacity_kpis(None) is None
 
 
-def test_potential_lost_weekday(monkeypatch):
+def test_weekday_kpi_matrix(monkeypatch):
     import views.prio_vs_picking as pvp
 
-    # target is a Friday; build daily picks over the look-back.
     target = date(2026, 6, 19)  # Friday
     assert target.weekday() == 4
-    days = [target - timedelta(days=n) for n in range(0, 70, 7)]  # Fridays
-    days += [target - timedelta(days=3)]  # a Tuesday (must be ignored)
-    counts = {d: 100.0 for d in days}
+    fridays = [target - timedelta(days=n) for n in range(0, 70, 7)]
+    counts = {d: 100.0 for d in fridays}
     counts[target - timedelta(days=7)] = 500.0  # best Friday
-    counts[target] = 300.0                       # today
-    counts[target - timedelta(days=3)] = 900.0   # Tuesday, ignored
+    counts[target] = 300.0
+    counts[target - timedelta(days=3)] = 900.0  # Tuesday, must be ignored
 
     def fake_daily(inst_id, start, end):
         rows = [{"date": pd.Timestamp(d), "port_id": 1, "pick_type": "picks",
                  "category": "1", "count": c} for d, c in counts.items()]
-        # a non-pick / other-category row that must be filtered out.
         rows.append({"date": pd.Timestamp(target), "port_id": 1,
                      "pick_type": "presentations", "category": "3",
-                     "count": 999.0})
+                     "count": 999.0})  # filtered out
         return pd.DataFrame(rows)
 
     monkeypatch.setattr(pvp, "query_port_wait_time_daily", fake_daily)
-    res = _potential_lost_weekday("inst-1", target)
+    site_map = {"WH": {"Chilled": "inst-91", "Ambient": "inst-92"}}
+    # skip the per-day utilisation pulls (network); test the picks/lost logic.
+    res = _weekday_kpi_matrix(site_map, "WH", target, months=3, with_util=False)
     assert res is not None
-    assert res["best"] == 500.0
-    assert res["day_picks"] == 300.0
-    # lost = 1 - 300/500 = 40%.
-    assert round(res["lost_pct"], 1) == 40.0
-    assert res["best_date"] == target - timedelta(days=7)
+    df, best_dates = res
+    # only Fridays (no Tuesday), one row per Friday.
+    assert len(df) == len(fridays)
+    assert all(date.fromisoformat(i).weekday() == 4 for i in df.index)
+    best_iso = (target - timedelta(days=7)).isoformat()
+    assert best_dates[91] == target - timedelta(days=7)
+    # best Friday -> 0% lost; today (300/500) -> 40% lost.
+    assert round(df.loc[best_iso, ("AS91", "Lost %")], 1) == 0.0
+    assert round(df.loc[target.isoformat(), ("AS91", "Lost %")], 1) == 40.0
+    assert df.loc[target.isoformat(), ("AS91", "Picks 1+2")] == 300.0
 
-    # no inst id / no data -> None.
-    assert _potential_lost_weekday(None, target) is None
+    # no installation mapping -> None.
+    assert _weekday_kpi_matrix({}, "WH", target, with_util=False) is None
+    # no data -> None.
     monkeypatch.setattr(pvp, "query_port_wait_time_daily",
                         lambda *a, **k: pd.DataFrame())
-    assert _potential_lost_weekday("inst-1", target) is None
+    assert _weekday_kpi_matrix(site_map, "WH", target, with_util=False) is None
 
 
 def test_missing_day_returns_none():

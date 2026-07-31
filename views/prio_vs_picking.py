@@ -410,35 +410,81 @@ def _daily_cat12_picks(inst_id, start_date, end_date):
     return d.groupby(d["date"].dt.date)["count"].sum()
 
 
-def _potential_lost_weekday(inst_id, target_date, months=3):
-    """Potential-lost % for the target day vs the best same-weekday day in the
-    last `months`.
-
-    The best day of the same weekday (e.g. best Friday) over the look-back is
-    100 %; every other same-weekday day falls below it and the shortfall is the
-    lost potential. Returns None when there is no history to compare against.
-    """
+def _util_for_day(inst_id, day):
+    """Whole-day utilisation (grey ÷ purple, averaged over the day) for one
+    AutoStore on one day. Pulls that single day's hourly port-wait + robot-state
+    (both disk-cached) so the 4-month matrix builds day by day without holding a
+    long hourly window in memory. Returns NaN when data is missing."""
     if not inst_id:
+        return float("nan")
+    try:
+        dfw = query_port_wait_time(
+            inst_id, str(day), str(day + timedelta(days=1)))
+        rob = query_robot_state_hourly(
+            inst_id, str(day), str(day + timedelta(days=1)))
+    except Exception:
+        return float("nan")
+    if dfw is None or dfw.empty or rob is None or rob.empty:
+        return float("nan")
+    cap = _capacity_arrays(dfw, day, df_robot_hourly=rob)
+    kpi = _capacity_kpis(cap)
+    return kpi["utilisation"] if kpi else float("nan")
+
+
+def _weekday_kpi_matrix(site_map, site, target_date, months=4, with_util=True):
+    """Per-day KPI matrix for the same weekday over the last `months`.
+
+    One row per same-weekday day (e.g. every Friday) that has picking data.
+    Columns are paired per AutoStore (91 | 92): whole-day utilisation, whole-day
+    cat 1+2 picks and potential lost % (shortfall vs the best same-weekday day,
+    which is 100 %). Returns (DataFrame, best_dates) or None.
+    """
+    insts = {num: site_map.get(site, {}).get(_AS_ENV.get(num))
+             for num in (91, 92)}
+    if not any(insts.values()):
         return None
     start = target_date - timedelta(days=30 * months)
-    s = _daily_cat12_picks(inst_id, start, target_date + timedelta(days=1))
-    if s.empty:
-        return None
+    end = target_date + timedelta(days=1)
     wd = target_date.weekday()
-    same = s[[d.weekday() == wd for d in s.index]]
-    if same.empty:
+
+    picks, best_val, best_date = {}, {}, {}
+    for num, inst in insts.items():
+        if not inst:
+            continue
+        s = _daily_cat12_picks(inst, start, end)
+        s = s[[d.weekday() == wd for d in s.index]]
+        picks[num] = s
+        if not s.empty and float(s.max()) > 0:
+            best_val[num] = float(s.max())
+            best_date[num] = s.idxmax()
+
+    days = sorted(set().union(*[set(s.index) for s in picks.values()])) \
+        if picks else []
+    if not days:
         return None
-    best = float(same.max())
-    if best <= 0:
-        return None
-    day_picks = float(s.get(target_date, 0.0))
-    return {
-        "day_picks": day_picks,
-        "best": best,
-        "best_date": same.idxmax(),
-        "lost_pct": max(0.0, (1.0 - day_picks / best) * 100.0),
-        "n_days": int(same.shape[0]),
-    }
+
+    rows = {}
+    for d in days:
+        row = {}
+        for num in (91, 92):
+            s = picks.get(num, pd.Series(dtype=float))
+            pk = float(s.get(d, float("nan")))
+            row[(f"AS{num}", "Picks 1+2")] = pk
+            b = best_val.get(num)
+            row[(f"AS{num}", "Lost %")] = (
+                max(0.0, (1.0 - pk / b) * 100.0)
+                if b and pk == pk else float("nan"))
+            row[(f"AS{num}", "Util %")] = (
+                _util_for_day(insts.get(num), d) if with_util else float("nan"))
+        rows[d] = row
+
+    df = pd.DataFrame(
+        {d: rows[d] for d in days}).T
+    df = df.reindex(columns=pd.MultiIndex.from_tuples(
+        [(f"AS{n}", m) for n in (91, 92)
+         for m in ("Util %", "Picks 1+2", "Lost %")]))
+    df.index = [d.isoformat() for d in days]
+    return df, {num: best_date.get(num) for num in (91, 92)}
 
 
 def _capacity_chart(df_wait, autostore_num, warehouse_name, target_date, site_name, ax=None):
@@ -811,37 +857,59 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
     return store_dates, dropped
 
 
-def _draw_capacity_kpi_table(kpi_rows, target_date):
-    """Whole-day AutoStore capacity KPI table (one row per AutoStore).
+def _draw_capacity_kpi_table(site_map, site, target_date):
+    """Same-weekday capacity KPI matrix (rows = days, columns paired per AS).
 
-    Columns: average daily utilisation (grey/purple), whole-day cat 1+2 picks,
-    and potential lost % vs the best same-weekday day in the last 3 months.
+    Rows are every same-weekday day (e.g. all Fridays) in the last 4 months with
+    picking data; the viewed day and each AutoStore's best day are highlighted.
+    Columns are grouped per AutoStore (91 | 92): whole-day utilisation, whole-day
+    cat 1+2 picks and potential lost % vs the best same-weekday day (100 %).
     """
     st.divider()
-    st.markdown("#### AutoStore capacity KPIs (whole day)")
     weekday = target_date.strftime("%A")
-    rows = {}
-    for num in sorted(kpi_rows):
-        kpi = kpi_rows[num]["kpi"]
-        lost = kpi_rows[num]["lost"]
-        if lost is not None and lost["lost_pct"] is not None:
-            lost_txt = f"{lost['lost_pct']:.0f}%"
-            best_txt = f"{lost['best']:,.0f} (best {weekday} {lost['best_date']})"
-        else:
-            lost_txt = "n/a"
-            best_txt = "no comparable history"
-        rows[f"AutoStore {num} ({_AS_ENV.get(num, '')})"] = {
-            "Utilisation avg (whole day)": f"{kpi['utilisation']:.0f}%",
-            "Picks cat 1+2 (whole day)": f"{kpi['picks_cat12']:,.0f}",
-            "Potential lost %": lost_txt,
-            "Best same-weekday (3 mo)": best_txt,
-        }
-    st.dataframe(pd.DataFrame(rows).T, use_container_width=True)
+    st.markdown(f"#### AutoStore capacity KPIs — {weekday}s (last 4 months)")
+    with st.spinner(f"Building {weekday} KPI matrix "
+                    "(utilisation pulls per-day data — first load is slower, "
+                    "then served from disk cache)..."):
+        res = _weekday_kpi_matrix(site_map, site, target_date)
+    if res is None:
+        st.info("No comparable same-weekday history for capacity KPIs.")
+        return
+    df, best_dates = res
+    tgt = target_date.isoformat()
+    best_rows = {num: (d.isoformat() if d else None)
+                 for num, d in best_dates.items()}
+
+    fmt = {}
+    for n in (91, 92):
+        fmt[(f"AS{n}", "Util %")] = "{:.0f}%"
+        fmt[(f"AS{n}", "Lost %")] = "{:.0f}%"
+        fmt[(f"AS{n}", "Picks 1+2")] = "{:,.0f}"
+    lost_cols = [(f"AS{n}", "Lost %") for n in (91, 92)]
+
+    def _row_style(row):
+        out = [""] * len(row)
+        if row.name == tgt:
+            out = ["background-color:#cfe3ff;font-weight:600"] * len(row)
+        for i, col in enumerate(row.index):
+            num = 91 if col[0] == "AS91" else 92
+            if best_rows.get(num) == row.name and col[0] == f"AS{num}":
+                out[i] = (out[i] + ";" if out[i] else "") + \
+                    "border:2px solid #2e7d32"
+        return out
+
+    sty = (df.style
+           .format(fmt, na_rep="–")
+           .background_gradient(cmap="Reds", subset=lost_cols, vmin=0, vmax=40)
+           .apply(_row_style, axis=1))
+    st.dataframe(sty, use_container_width=True,
+                 height=min(38 * (len(df) + 2), 640))
     st.caption(
-        "Utilisation = avg over the day of (all bin presentations ÷ theoretical "
-        "max/hour); the purple ceiling is 100 %. Potential lost % = shortfall vs "
-        f"the best same weekday ({weekday}) picked cat 1+2 in the last 3 months "
-        "(that day = 100 %).")
+        "Rows = every " + weekday + " in the last 4 months with data; the viewed "
+        "day is highlighted (blue) and each AutoStore's best day is boxed (green). "
+        "Util % = avg over the day of (all bin presentations ÷ theoretical "
+        "max/hour), purple ceiling = 100 %. Lost % = shortfall in cat 1+2 picks "
+        "vs that AutoStore's best " + weekday + " (that day = 100 %).")
 
 
 def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df,
@@ -855,7 +923,7 @@ def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df,
     plan = view.get("plan")
     site = view.get("site") or warehouse
     site_map = site_map or {}
-    kpi_rows = {}
+    has_capacity = False
 
     df_91_scatter = df_day[df_day["AutoStore"].str.contains(".91", regex=False)].copy()
     df_92_scatter = df_day[df_day["AutoStore"].str.contains(".92", regex=False)].copy()
@@ -894,18 +962,15 @@ def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df,
             fig = _generate_chart(scatter, num, warehouse,
                                   hourly_overlay=ov, plan_planned=plan)
         st.pyplot(fig)
-        kpi = _capacity_kpis(cap) if cap else None
-        if kpi:
-            inst_id = site_map.get(site, {}).get(_AS_ENV.get(num))
-            lost = _potential_lost_weekday(inst_id, target_date)
-            kpi_rows[num] = {"kpi": kpi, "lost": lost}
+        if cap:
+            has_capacity = True
         st.download_button(f"Download PNG — AS{num}", data=_fig_to_bytes(fig),
                            file_name=f"prio_vs_picking_{warehouse}_as{num}.png",
                            mime="image/png", key=f"dl_{num}")
         plt.close(fig)
 
-    if kpi_rows:
-        _draw_capacity_kpi_table(kpi_rows, target_date)
+    if has_capacity:
+        _draw_capacity_kpi_table(site_map, site, target_date)
 
     if show_comparison and stats.get(91) and stats.get(92):
         st.divider()
