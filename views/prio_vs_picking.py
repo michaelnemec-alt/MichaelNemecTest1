@@ -12,6 +12,7 @@ import picking_store
 from snowflake_utils import is_snowflake_configured, get_available_warehouses, query_picking_data
 from cubeanalytics_utils import (
     is_api_configured, get_installations, query_port_wait_time,
+    query_port_wait_time_daily,
     query_live_jobs, query_live_robots, query_live_robot_battery,
     query_robot_state_hourly,
 )
@@ -370,33 +371,73 @@ def _capacity_arrays(df_wait_day, target_date, df_wait_window=None,
 
 
 def _capacity_kpis(cap):
-    """Day KPIs from the hourly ceiling vs actual bins picked.
+    """Whole-day AutoStore KPIs from the hourly capacity arrays.
 
-    Only hours where the theoretical ceiling is known (robot-state available,
-    theomax > 0) are counted. `potential_lost` = the bins that could have been
-    picked at peak productivity with the fleet that was actually available but
-    were not — i.e. unrealised picking capacity for the day. `utilisation` is
-    actual / ceiling over those hours.
+    `utilisation` = average over the day of hourly (total bin presentations /
+    theoretical max). The grey line (all bin presentations, every pick type and
+    category) is the real load of the AutoStore; the purple ceiling is 100 %.
+    We use all presentations (not just picked cat 1+2) because bins that are not
+    picked still occupy the system, so picks alone could never reach 100 %.
+    Only hours where the ceiling is known (theomax > 0) are averaged.
+
+    `picks_cat12` = whole-day count of picked bins in category 1 + 2 (black line).
     """
     theomax = (cap or {}).get("theomax") or []
+    total_bins = (cap or {}).get("total_bins") or []
     bins = (cap or {}).get("bins") or []
-    picked = ceiling = lost = 0.0
-    hours = 0
-    for tm, b in zip(theomax, bins):
-        if not tm:
-            continue
-        hours += 1
-        picked += b or 0.0
-        ceiling += tm
-        lost += max(0.0, tm - (b or 0.0))
-    if hours == 0 or ceiling <= 0:
+    utils = [tot / tm * 100.0
+             for tm, tot in zip(theomax, total_bins) if tm and tm > 0]
+    if not utils:
         return None
     return {
-        "picked": picked,
-        "ceiling": ceiling,
-        "potential_lost": lost,
-        "utilisation": picked / ceiling * 100.0,
-        "hours": hours,
+        "utilisation": sum(utils) / len(utils),
+        "picks_cat12": sum(bins),
+        "hours": len(utils),
+    }
+
+
+def _daily_cat12_picks(inst_id, start_date, end_date):
+    """Whole-day picked-bin counts (category 1+2) per calendar day from the
+    port-bin-wait-time daily source (same source as UNIFY Pivot Ready, full
+    history). Returns a Series indexed by date."""
+    dfd = query_port_wait_time_daily(inst_id, str(start_date), str(end_date))
+    if dfd is None or dfd.empty:
+        return pd.Series(dtype=float)
+    d = dfd[(dfd["pick_type"] == "picks")
+            & (dfd["category"].isin(_CAPACITY_CATEGORIES))]
+    if d.empty:
+        return pd.Series(dtype=float)
+    return d.groupby(d["date"].dt.date)["count"].sum()
+
+
+def _potential_lost_weekday(inst_id, target_date, months=3):
+    """Potential-lost % for the target day vs the best same-weekday day in the
+    last `months`.
+
+    The best day of the same weekday (e.g. best Friday) over the look-back is
+    100 %; every other same-weekday day falls below it and the shortfall is the
+    lost potential. Returns None when there is no history to compare against.
+    """
+    if not inst_id:
+        return None
+    start = target_date - timedelta(days=30 * months)
+    s = _daily_cat12_picks(inst_id, start, target_date + timedelta(days=1))
+    if s.empty:
+        return None
+    wd = target_date.weekday()
+    same = s[[d.weekday() == wd for d in s.index]]
+    if same.empty:
+        return None
+    best = float(same.max())
+    if best <= 0:
+        return None
+    day_picks = float(s.get(target_date, 0.0))
+    return {
+        "day_picks": day_picks,
+        "best": best,
+        "best_date": same.idxmax(),
+        "lost_pct": max(0.0, (1.0 - day_picks / best) * 100.0),
+        "n_days": int(same.shape[0]),
     }
 
 
@@ -770,7 +811,41 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
     return store_dates, dropped
 
 
-def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df):
+def _draw_capacity_kpi_table(kpi_rows, target_date):
+    """Whole-day AutoStore capacity KPI table (one row per AutoStore).
+
+    Columns: average daily utilisation (grey/purple), whole-day cat 1+2 picks,
+    and potential lost % vs the best same-weekday day in the last 3 months.
+    """
+    st.divider()
+    st.markdown("#### AutoStore capacity KPIs (whole day)")
+    weekday = target_date.strftime("%A")
+    rows = {}
+    for num in sorted(kpi_rows):
+        kpi = kpi_rows[num]["kpi"]
+        lost = kpi_rows[num]["lost"]
+        if lost is not None and lost["lost_pct"] is not None:
+            lost_txt = f"{lost['lost_pct']:.0f}%"
+            best_txt = f"{lost['best']:,.0f} (best {weekday} {lost['best_date']})"
+        else:
+            lost_txt = "n/a"
+            best_txt = "no comparable history"
+        rows[f"AutoStore {num} ({_AS_ENV.get(num, '')})"] = {
+            "Utilisation avg (whole day)": f"{kpi['utilisation']:.0f}%",
+            "Picks cat 1+2 (whole day)": f"{kpi['picks_cat12']:,.0f}",
+            "Potential lost %": lost_txt,
+            "Best same-weekday (3 mo)": best_txt,
+        }
+    st.dataframe(pd.DataFrame(rows).T, use_container_width=True)
+    st.caption(
+        "Utilisation = avg over the day of (all bin presentations ÷ theoretical "
+        "max/hour); the purple ceiling is 100 %. Potential lost % = shortfall vs "
+        f"the best same weekday ({weekday}) picked cat 1+2 in the last 3 months "
+        "(that day = 100 %).")
+
+
+def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df,
+                   site_map=None):
     """Render the metrics, per-AutoStore charts, comparison and hourly chart."""
     df_day = view["df"]
     target_date = view["date"]
@@ -779,6 +854,8 @@ def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df):
     capacity = view.get("capacity") or {}
     plan = view.get("plan")
     site = view.get("site") or warehouse
+    site_map = site_map or {}
+    kpi_rows = {}
 
     df_91_scatter = df_day[df_day["AutoStore"].str.contains(".91", regex=False)].copy()
     df_92_scatter = df_day[df_day["AutoStore"].str.contains(".92", regex=False)].copy()
@@ -819,21 +896,16 @@ def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df):
         st.pyplot(fig)
         kpi = _capacity_kpis(cap) if cap else None
         if kpi:
-            k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Bins picked (cap. hours)", f"{kpi['picked']:,.0f}")
-            k2.metric("Theoretical ceiling", f"{kpi['ceiling']:,.0f}")
-            k3.metric("Potential lost", f"{kpi['potential_lost']:,.0f}",
-                      help="Bins that could have been picked at peak "
-                           "productivity with the fleet actually available "
-                           "that hour, but were not (unrealised capacity). "
-                           "Summed over hours where the ceiling is known.")
-            k4.metric("Capacity utilisation", f"{kpi['utilisation']:.0f}%",
-                      help="Bins picked / theoretical ceiling over the "
-                           f"{kpi['hours']} hours with a known ceiling.")
+            inst_id = site_map.get(site, {}).get(_AS_ENV.get(num))
+            lost = _potential_lost_weekday(inst_id, target_date)
+            kpi_rows[num] = {"kpi": kpi, "lost": lost}
         st.download_button(f"Download PNG — AS{num}", data=_fig_to_bytes(fig),
                            file_name=f"prio_vs_picking_{warehouse}_as{num}.png",
                            mime="image/png", key=f"dl_{num}")
         plt.close(fig)
+
+    if kpi_rows:
+        _draw_capacity_kpi_table(kpi_rows, target_date)
 
     if show_comparison and stats.get(91) and stats.get(92):
         st.divider()
@@ -1158,7 +1230,7 @@ def _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
             return
         view["site"] = site or view.get("site")
         ctx = hourly_context_df if hourly_context_df is not None else view["df"]
-        _draw_day_view(view, show_comparison, show_hourly, ctx)
+        _draw_day_view(view, show_comparison, show_hourly, ctx, site_map=site_map)
 
     _pick_and_draw()
 
@@ -1282,7 +1354,7 @@ def render():
             "overlay": overlay, "capacity": capacity,
             "plan": plan_by_date.get(target_date), "site": site,
         }
-        _draw_day_view(view, show_comparison, show_hourly, df)
+        _draw_day_view(view, show_comparison, show_hourly, df, site_map=site_map)
         _maybe_live_test(show_live_test, warehouse)
         return
 

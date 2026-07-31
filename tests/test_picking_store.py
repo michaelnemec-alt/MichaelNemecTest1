@@ -18,7 +18,9 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import picking_store as ps
-from views.prio_vs_picking import _compute_overlay, _capacity_kpis
+from views.prio_vs_picking import (
+    _compute_overlay, _capacity_kpis, _potential_lost_weekday,
+)
 
 
 def _with_store(fn):
@@ -112,23 +114,72 @@ def test_compute_overlay_prepick_vs_sameday():
 
 
 def test_capacity_kpis():
-    # ceiling known for 2 hours (100+100); picked 60+100 -> lost 40, util 80%.
+    # ceiling known for 2 hours; utilisation = avg(grey/purple) over those hours.
     theomax = [0.0] * 24
+    total_bins = [0.0] * 24
     bins = [0.0] * 24
     theomax[8], theomax[9] = 100.0, 100.0
-    bins[8], bins[9] = 60.0, 100.0
-    kpi = _capacity_kpis({"theomax": theomax, "bins": bins})
+    total_bins[8], total_bins[9] = 80.0, 100.0  # grey (all presentations)
+    bins[8], bins[9] = 60.0, 100.0              # black (picked cat 1+2)
+    kpi = _capacity_kpis(
+        {"theomax": theomax, "total_bins": total_bins, "bins": bins})
     assert kpi["hours"] == 2
-    assert kpi["picked"] == 160.0
-    assert kpi["ceiling"] == 200.0
-    assert kpi["potential_lost"] == 40.0
-    assert round(kpi["utilisation"], 1) == 80.0
-    # over-performance in an hour does not create negative lost.
-    kpi2 = _capacity_kpis({"theomax": [50.0], "bins": [70.0]})
-    assert kpi2["potential_lost"] == 0.0
+    # utilisation = mean(80/100, 100/100) = 90%.
+    assert round(kpi["utilisation"], 1) == 90.0
+    # whole-day cat 1+2 picks = sum of black line.
+    assert kpi["picks_cat12"] == 160.0
+    # hours without a known ceiling are excluded from the average.
+    theomax2 = [0.0] * 24
+    total_bins2 = [50.0] * 24
+    theomax2[10] = 200.0
+    total_bins2[10] = 100.0
+    kpi2 = _capacity_kpis(
+        {"theomax": theomax2, "total_bins": total_bins2, "bins": [0.0] * 24})
+    assert kpi2["hours"] == 1
+    assert round(kpi2["utilisation"], 1) == 50.0
     # no known ceiling -> None.
-    assert _capacity_kpis({"theomax": [0.0, 0.0], "bins": [5.0, 5.0]}) is None
+    assert _capacity_kpis(
+        {"theomax": [0.0, 0.0], "total_bins": [5.0, 5.0], "bins": [5.0, 5.0]}
+    ) is None
     assert _capacity_kpis(None) is None
+
+
+def test_potential_lost_weekday(monkeypatch):
+    import views.prio_vs_picking as pvp
+
+    # target is a Friday; build daily picks over the look-back.
+    target = date(2026, 6, 19)  # Friday
+    assert target.weekday() == 4
+    days = [target - timedelta(days=n) for n in range(0, 70, 7)]  # Fridays
+    days += [target - timedelta(days=3)]  # a Tuesday (must be ignored)
+    counts = {d: 100.0 for d in days}
+    counts[target - timedelta(days=7)] = 500.0  # best Friday
+    counts[target] = 300.0                       # today
+    counts[target - timedelta(days=3)] = 900.0   # Tuesday, ignored
+
+    def fake_daily(inst_id, start, end):
+        rows = [{"date": pd.Timestamp(d), "port_id": 1, "pick_type": "picks",
+                 "category": "1", "count": c} for d, c in counts.items()]
+        # a non-pick / other-category row that must be filtered out.
+        rows.append({"date": pd.Timestamp(target), "port_id": 1,
+                     "pick_type": "presentations", "category": "3",
+                     "count": 999.0})
+        return pd.DataFrame(rows)
+
+    monkeypatch.setattr(pvp, "query_port_wait_time_daily", fake_daily)
+    res = _potential_lost_weekday("inst-1", target)
+    assert res is not None
+    assert res["best"] == 500.0
+    assert res["day_picks"] == 300.0
+    # lost = 1 - 300/500 = 40%.
+    assert round(res["lost_pct"], 1) == 40.0
+    assert res["best_date"] == target - timedelta(days=7)
+
+    # no inst id / no data -> None.
+    assert _potential_lost_weekday(None, target) is None
+    monkeypatch.setattr(pvp, "query_port_wait_time_daily",
+                        lambda *a, **k: pd.DataFrame())
+    assert _potential_lost_weekday("inst-1", target) is None
 
 
 def test_missing_day_returns_none():
