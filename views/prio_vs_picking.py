@@ -471,21 +471,23 @@ def _day_metrics(inst_id, day):
     }
 
 
-def _weekday_kpi_matrix(site_map, site, target_date, months=4, with_util=True):
-    """Per-day KPI matrix for the same weekday over the last `months`.
+def _weekday_kpi_matrix(site_map, site, target_date,
+                        months_before=1, months_after=3, with_util=True):
+    """Per-day KPI matrix for the same weekday around the selected day.
 
-    One row per same-weekday day (e.g. every Friday) that has picking data.
-    Columns are paired per AutoStore (91 | 92): whole-day utilisation, available
-    robot-hours, pick yield, whole-day cat 1+2 picks and potential lost %
-    (shortfall vs the best same-weekday day, which is 100 %). Returns
-    (DataFrame, best_dates) or None.
+    Window = `months_before` months before to `months_after` months after the
+    selected day (default 1 before / 3 after), one row per same-weekday day
+    (e.g. every Friday) that has picking data. Columns are paired per AutoStore
+    (91 | 92): whole-day utilisation, available robot-hours, pick yield,
+    whole-day cat 1+2 picks and potential lost % (shortfall vs the best
+    same-weekday day, which is 100 %). Returns (DataFrame, best_dates) or None.
     """
     insts = {num: site_map.get(site, {}).get(_AS_ENV.get(num))
              for num in (91, 92)}
     if not any(insts.values()):
         return None
-    start = target_date - timedelta(days=30 * months)
-    end = target_date + timedelta(days=1)
+    start = target_date - timedelta(days=30 * months_before)
+    end = target_date + timedelta(days=30 * months_after)
     wd = target_date.weekday()
 
     picks, best_val, best_date = {}, {}, {}
@@ -914,7 +916,7 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
     st.divider()
     weekday = target_date.strftime("%A")
     st.markdown(f"#### AutoStore capacity KPIs — {site_display_label(site)} — "
-                f"{weekday}s (last 4 months)")
+                f"{weekday}s (1 mo before – 3 mo after selected day)")
     with st.spinner(f"Building {weekday} KPI matrix "
                     "(utilisation pulls per-day data — first load is slower, "
                     "then served from disk cache)..."):
@@ -939,16 +941,26 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
         fmt[(f"AS{n}", "Picks 1+2")] = "{:,.0f}"
         fmt[(f"AS{n}", "Robot-h")] = "{:,.0f}"
     lost_cols = [(f"AS{n}", "Lost %") for n in (91, 92)]
+    lost_set = set(lost_cols)
 
     def _row_style(row):
         out = [""] * len(row)
-        if row.name == tgt:
-            out = ["background-color:#cfe3ff;font-weight:600"] * len(row)
+        is_tgt = row.name == tgt
         for i, col in enumerate(row.index):
+            styles = []
+            if is_tgt:
+                styles.append("font-weight:700")
+                if tuple(col) in lost_set:
+                    # keep the Lost % conditional colour (Reds gradient); mark
+                    # the selected row with a border instead of a fill.
+                    styles.append("border-top:2px solid #1565c0")
+                    styles.append("border-bottom:2px solid #1565c0")
+                else:
+                    styles.append("background-color:#cfe3ff")
             num = 91 if col[0] == "AS91" else 92
             if best_rows.get(num) == row.name and col[0] == f"AS{num}":
-                out[i] = (out[i] + ";" if out[i] else "") + \
-                    "border:2px solid #2e7d32"
+                styles.append("border:2px solid #2e7d32")
+            out[i] = ";".join(styles)
         return out
 
     sty = (df.style
@@ -958,8 +970,9 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
     st.dataframe(sty, use_container_width=True,
                  height=min(38 * (len(df) + 2), 640))
     st.caption(
-        "Rows = every " + weekday + " in the last 4 months with data; the viewed "
-        "day is highlighted (blue) and each AutoStore's best day is boxed (green). "
+        "Rows = every " + weekday + " from 1 month before to 3 months after the "
+        "selected day with data; the viewed day is highlighted (blue, keeping the "
+        "Lost % colour) and each AutoStore's best day is boxed (green). "
         "Util % = avg over the day of (all bin presentations ÷ theoretical "
         "max/hour), purple ceiling = 100 %. Robot-h = available robot-hours "
         "(fleet minus robots parked charging) — the capacity actually on offer, "

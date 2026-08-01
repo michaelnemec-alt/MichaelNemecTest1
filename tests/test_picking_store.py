@@ -203,7 +203,8 @@ def test_weekday_kpi_matrix(monkeypatch):
     monkeypatch.setattr(pvp, "query_port_wait_time_daily", fake_daily)
     site_map = {"WH": {"Chilled": "inst-91", "Ambient": "inst-92"}}
     # skip the per-day utilisation pulls (network); test the picks/lost logic.
-    res = _weekday_kpi_matrix(site_map, "WH", target, months=3, with_util=False)
+    res = _weekday_kpi_matrix(site_map, "WH", target,
+                              months_before=3, months_after=1, with_util=False)
     assert res is not None
     df, best_dates = res
     # only Fridays (no Tuesday), one row per Friday; index carries weekday abbr.
