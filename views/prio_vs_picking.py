@@ -941,7 +941,10 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
         fmt[(f"AS{n}", "Picks 1+2")] = "{:,.0f}"
         fmt[(f"AS{n}", "Robot-h")] = "{:,.0f}"
     lost_cols = [(f"AS{n}", "Lost %") for n in (91, 92)]
-    lost_set = set(lost_cols)
+    util_cols = [(f"AS{n}", "Util %") for n in (91, 92)]
+    # columns carrying a conditional colour gradient: keep it visible even on
+    # the selected row (mark selection with a border, not an overriding fill).
+    grad_set = set(lost_cols) | set(util_cols)
 
     def _row_style(row):
         out = [""] * len(row)
@@ -950,9 +953,7 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
             styles = []
             if is_tgt:
                 styles.append("font-weight:700")
-                if tuple(col) in lost_set:
-                    # keep the Lost % conditional colour (Reds gradient); mark
-                    # the selected row with a border instead of a fill.
+                if tuple(col) in grad_set:
                     styles.append("border-top:2px solid #1565c0")
                     styles.append("border-bottom:2px solid #1565c0")
                 else:
@@ -966,6 +967,7 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
     sty = (df.style
            .format(fmt, na_rep="–")
            .background_gradient(cmap="Reds", subset=lost_cols, vmin=0, vmax=40)
+           .background_gradient(cmap="Greens", subset=util_cols, vmin=40, vmax=85)
            .apply(_row_style, axis=1))
     st.dataframe(sty, use_container_width=True,
                  height=min(38 * (len(df) + 2), 640))
@@ -974,7 +976,7 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
         "selected day with data; the viewed day is highlighted (blue, keeping the "
         "Lost % colour) and each AutoStore's best day is boxed (green). "
         "Util % = avg over the day of (all bin presentations ÷ theoretical "
-        "max/hour), purple ceiling = 100 %. Robot-h = available robot-hours "
+        "max/hour), purple ceiling = 100 % (greener = higher). Robot-h = available robot-hours "
         "(fleet minus robots parked charging) — the capacity actually on offer, "
         "which drives the ceiling. Yield % = cat 1+2 picks ÷ all bin presentations "
         "(how much of the grid's activity became salable picks). Lost % = shortfall "
