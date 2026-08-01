@@ -472,11 +472,11 @@ def _day_metrics(inst_id, day):
 
 
 def _weekday_kpi_matrix(site_map, site, target_date,
-                        months_before=1, months_after=3, with_util=True):
+                        months_before=3, months_after=1, with_util=True):
     """Per-day KPI matrix for the same weekday around the selected day.
 
     Window = `months_before` months before to `months_after` months after the
-    selected day (default 1 before / 3 after), one row per same-weekday day
+    selected day (default 3 before / 1 after), one row per same-weekday day
     (e.g. every Friday) that has picking data. Columns are paired per AutoStore
     (91 | 92): whole-day utilisation, available robot-hours, pick yield,
     whole-day cat 1+2 picks and potential lost % (shortfall vs the best
@@ -916,7 +916,7 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
     st.divider()
     weekday = target_date.strftime("%A")
     st.markdown(f"#### AutoStore capacity KPIs — {site_display_label(site)} — "
-                f"{weekday}s (1 mo before – 3 mo after selected day)")
+                f"{weekday}s (3 mo before – 1 mo after selected day)")
     with st.spinner(f"Building {weekday} KPI matrix "
                     "(utilisation pulls per-day data — first load is slower, "
                     "then served from disk cache)..."):
@@ -972,7 +972,7 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
     st.dataframe(sty, use_container_width=True,
                  height=min(38 * (len(df) + 2), 640))
     st.caption(
-        "Rows = every " + weekday + " from 1 month before to 3 months after the "
+        "Rows = every " + weekday + " from 3 months before to 1 month after the "
         "selected day with data; the viewed day is highlighted (blue, keeping the "
         "Lost % colour) and each AutoStore's best day is boxed (green). "
         "Util % = avg over the day of (all bin presentations ÷ theoretical "
