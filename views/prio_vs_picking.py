@@ -471,6 +471,26 @@ def _day_metrics(inst_id, day):
     }
 
 
+def _why_lost(util, yld, lost, best_util, best_yld):
+    """Plain-language reason for a day's Lost %, comparing it to that
+    AutoStore's best same-weekday day. Lost picks vs the best day come from a
+    lower grid utilisation (grid ran less), a lower pick yield (more of the
+    throughput went to non-pick sub-tasks) or, when util and yield match, simply
+    lower demand. Returns '' when there is nothing to explain / no data."""
+    if lost != lost:            # NaN
+        return ""
+    if lost < 0.5:
+        return "Best day"
+    parts = []
+    if best_yld == best_yld and yld == yld and best_yld - yld >= 1.0:
+        parts.append(f"more sub-tasks (yield {yld:.0f}% vs {best_yld:.0f}%)")
+    if best_util == best_util and util == util and best_util - util >= 1.0:
+        parts.append(f"grid ran less (util {util:.0f}% vs {best_util:.0f}%)")
+    if not parts:
+        return "lower demand (similar util & yield)"
+    return "; ".join(parts)
+
+
 def _weekday_kpi_matrix(site_map, site, target_date,
                         months_before=3, months_after=1, with_util=True):
     """Per-day KPI matrix for the same weekday around the selected day.
@@ -527,9 +547,26 @@ def _weekday_kpi_matrix(site_map, site, target_date,
 
     df = pd.DataFrame(
         {d: rows[d] for d in days}).T
+
+    # Plain-language "why" per AutoStore, comparing each day to its best day.
+    for num in (91, 92):
+        bd = best_date.get(num)
+        bu = (float(df.loc[bd, (f"AS{num}", "Util %")])
+              if bd in df.index else float("nan"))
+        by = (float(df.loc[bd, (f"AS{num}", "Yield %")])
+              if bd in df.index else float("nan"))
+        df[(f"AS{num}", "Why")] = [
+            _why_lost(
+                float(df.loc[d, (f"AS{num}", "Util %")]),
+                float(df.loc[d, (f"AS{num}", "Yield %")]),
+                float(df.loc[d, (f"AS{num}", "Lost %")]),
+                bu, by)
+            for d in days]
+
     df = df.reindex(columns=pd.MultiIndex.from_tuples(
         [(f"AS{n}", m) for n in (91, 92)
-         for m in ("Util %", "Robot-h", "Yield %", "Picks 1+2", "Lost %")]))
+         for m in ("Util %", "Robot-h", "Yield %", "Picks 1+2",
+                   "Lost %", "Why")]))
     df.index = [f"{d.strftime('%a')} {d.isoformat()}" for d in days]
     return df, {num: best_date.get(num) for num in (91, 92)}
 
@@ -942,9 +979,10 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
         fmt[(f"AS{n}", "Robot-h")] = "{:,.0f}"
     lost_cols = [(f"AS{n}", "Lost %") for n in (91, 92)]
     util_cols = [(f"AS{n}", "Util %") for n in (91, 92)]
+    yield_cols = [(f"AS{n}", "Yield %") for n in (91, 92)]
     # columns carrying a conditional colour gradient: keep it visible even on
     # the selected row (mark selection with a border, not an overriding fill).
-    grad_set = set(lost_cols) | set(util_cols)
+    grad_set = set(lost_cols) | set(util_cols) | set(yield_cols)
 
     def _row_style(row):
         out = [""] * len(row)
@@ -968,6 +1006,7 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
            .format(fmt, na_rep="–")
            .background_gradient(cmap="Reds", subset=lost_cols, vmin=0, vmax=40)
            .background_gradient(cmap="Greens", subset=util_cols, vmin=40, vmax=85)
+           .background_gradient(cmap="Greens", subset=yield_cols, vmin=85, vmax=97)
            .apply(_row_style, axis=1))
     st.dataframe(sty, use_container_width=True,
                  height=min(38 * (len(df) + 2), 640))
@@ -979,8 +1018,10 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
         "max/hour), purple ceiling = 100 % (greener = higher). Robot-h = available robot-hours "
         "(fleet minus robots parked charging) — the capacity actually on offer, "
         "which drives the ceiling. Yield % = cat 1+2 picks ÷ all bin presentations "
-        "(how much of the grid's activity became salable picks). Lost % = shortfall "
-        "in cat 1+2 picks vs that AutoStore's best " + weekday + " (that day = 100 %).")
+        "(how much of the grid's activity became salable picks; greener = higher). "
+        "Lost % = shortfall in cat 1+2 picks vs that AutoStore's best " + weekday +
+        " (that day = 100 %). Why = plain-language reason for the loss (lower yield "
+        "= more sub-tasks, lower util = grid ran less, or simply lower demand).")
 
 
 def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df,

@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import picking_store as ps
 from views.prio_vs_picking import (
     _compute_overlay, _capacity_kpis, _weekday_kpi_matrix, _avail_robot_hours,
+    _why_lost,
 )
 
 
@@ -166,6 +167,22 @@ def test_avail_robot_hours():
     # empty / missing frame -> NaN.
     assert _avail_robot_hours(pd.DataFrame(), date(2026, 6, 1)) != \
         _avail_robot_hours(pd.DataFrame(), date(2026, 6, 1))
+
+
+def test_why_lost():
+    nan = float("nan")
+    # no data / best day -> no explanation to give.
+    assert _why_lost(nan, nan, nan, nan, nan) == ""
+    assert _why_lost(71.0, 95.0, 0.0, 71.0, 95.0) == "Best day"
+    # same util as best but lower yield -> loss blamed on sub-tasks.
+    msg = _why_lost(71.0, 91.0, 4.0, 71.0, 95.0)
+    assert "sub-tasks" in msg and "91% vs 95%" in msg
+    # same yield but lower util -> grid ran less.
+    msg2 = _why_lost(57.0, 94.0, 12.0, 71.0, 94.0)
+    assert "grid ran less" in msg2 and "57% vs 71%" in msg2
+    # util and yield match the best day -> lower demand.
+    assert _why_lost(71.0, 95.0, 8.0, 71.0, 95.0) == \
+        "lower demand (similar util & yield)"
 
 
 def test_site_aliases():
