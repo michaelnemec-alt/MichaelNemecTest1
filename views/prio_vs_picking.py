@@ -388,6 +388,11 @@ def _capacity_kpis(cap):
     Only hours where the ceiling is known (theomax > 0) are averaged.
 
     `picks_cat12` = whole-day count of picked bins in category 1 + 2 (black line).
+
+    `pick_yield` = cat 1+2 picks ÷ all bin presentations (%). The share of the
+    grid's activity that turned into salable picks; it is the bridge between the
+    all-presentations utilisation and the cat 1+2 pick output, so a high util
+    with low yield means the system was busy on non-pick work.
     """
     theomax = (cap or {}).get("theomax") or []
     total_bins = (cap or {}).get("total_bins") or []
@@ -396,11 +401,32 @@ def _capacity_kpis(cap):
              for tm, tot in zip(theomax, total_bins) if tm and tm > 0]
     if not utils:
         return None
+    total_pres = sum(total_bins)
+    picks = sum(bins)
     return {
         "utilisation": sum(utils) / len(utils),
-        "picks_cat12": sum(bins),
+        "picks_cat12": picks,
         "hours": len(utils),
+        "total_presentations": total_pres,
+        "pick_yield": (picks / total_pres * 100.0)
+        if total_pres > 0 else float("nan"),
     }
+
+
+def _avail_robot_hours(df_robot_hourly, target_date):
+    """Available robot-hours for the day = Σ over the day of (fleet-seconds −
+    charging_unavailable-seconds) / 3600, i.e. the fleet capacity actually on
+    offer for work. It drives the utilisation ceiling, so it explains a high
+    util % that is really a dropped ceiling (robots parked charging) rather than
+    genuinely exhausted capacity. Returns NaN when robot-state is missing."""
+    if df_robot_hourly is None or df_robot_hourly.empty:
+        return float("nan")
+    r = df_robot_hourly.copy()
+    r["_d"] = r["date"].dt.date
+    day = r[r["_d"] == target_date]
+    if day.empty:
+        return float("nan")
+    return float((day["total_s"] - day["charging_unavailable_s"]).sum() / 3600.0)
 
 
 def _daily_cat12_picks(inst_id, start_date, end_date):
@@ -417,34 +443,42 @@ def _daily_cat12_picks(inst_id, start_date, end_date):
     return d.groupby(d["date"].dt.date)["count"].sum()
 
 
-def _util_for_day(inst_id, day):
-    """Whole-day utilisation (grey ÷ purple, averaged over the day) for one
-    AutoStore on one day. Pulls that single day's hourly port-wait + robot-state
-    (both disk-cached) so the 4-month matrix builds day by day without holding a
-    long hourly window in memory. Returns NaN when data is missing."""
+def _day_metrics(inst_id, day):
+    """Whole-day capacity metrics for one AutoStore on one day: utilisation
+    (grey ÷ purple, averaged), pick yield (cat 1+2 picks ÷ all bin presentations)
+    and available robot-hours. Pulls that single day's hourly port-wait +
+    robot-state (both disk-cached) so the 4-month matrix builds day by day
+    without holding a long hourly window in memory. Missing data → NaN fields."""
+    nan = float("nan")
+    empty = {"util": nan, "yield": nan, "robot_h": nan}
     if not inst_id:
-        return float("nan")
+        return empty
     try:
         dfw = query_port_wait_time(
             inst_id, str(day), str(day + timedelta(days=1)))
         rob = query_robot_state_hourly(
             inst_id, str(day), str(day + timedelta(days=1)))
     except Exception:
-        return float("nan")
+        return empty
     if dfw is None or dfw.empty or rob is None or rob.empty:
-        return float("nan")
+        return empty
     cap = _capacity_arrays(dfw, day, df_robot_hourly=rob)
     kpi = _capacity_kpis(cap)
-    return kpi["utilisation"] if kpi else float("nan")
+    return {
+        "util": kpi["utilisation"] if kpi else nan,
+        "yield": kpi["pick_yield"] if kpi else nan,
+        "robot_h": _avail_robot_hours(rob, day),
+    }
 
 
 def _weekday_kpi_matrix(site_map, site, target_date, months=4, with_util=True):
     """Per-day KPI matrix for the same weekday over the last `months`.
 
     One row per same-weekday day (e.g. every Friday) that has picking data.
-    Columns are paired per AutoStore (91 | 92): whole-day utilisation, whole-day
-    cat 1+2 picks and potential lost % (shortfall vs the best same-weekday day,
-    which is 100 %). Returns (DataFrame, best_dates) or None.
+    Columns are paired per AutoStore (91 | 92): whole-day utilisation, available
+    robot-hours, pick yield, whole-day cat 1+2 picks and potential lost %
+    (shortfall vs the best same-weekday day, which is 100 %). Returns
+    (DataFrame, best_dates) or None.
     """
     insts = {num: site_map.get(site, {}).get(_AS_ENV.get(num))
              for num in (91, 92)}
@@ -481,15 +515,19 @@ def _weekday_kpi_matrix(site_map, site, target_date, months=4, with_util=True):
             row[(f"AS{num}", "Lost %")] = (
                 max(0.0, (1.0 - pk / b) * 100.0)
                 if b and pk == pk else float("nan"))
-            row[(f"AS{num}", "Util %")] = (
-                _util_for_day(insts.get(num), d) if with_util else float("nan"))
+            m = (_day_metrics(insts.get(num), d) if with_util
+                 else {"util": float("nan"), "yield": float("nan"),
+                       "robot_h": float("nan")})
+            row[(f"AS{num}", "Util %")] = m["util"]
+            row[(f"AS{num}", "Robot-h")] = m["robot_h"]
+            row[(f"AS{num}", "Yield %")] = m["yield"]
         rows[d] = row
 
     df = pd.DataFrame(
         {d: rows[d] for d in days}).T
     df = df.reindex(columns=pd.MultiIndex.from_tuples(
         [(f"AS{n}", m) for n in (91, 92)
-         for m in ("Util %", "Picks 1+2", "Lost %")]))
+         for m in ("Util %", "Robot-h", "Yield %", "Picks 1+2", "Lost %")]))
     df.index = [f"{d.strftime('%a')} {d.isoformat()}" for d in days]
     return df, {num: best_date.get(num) for num in (91, 92)}
 
@@ -896,8 +934,10 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
     fmt = {}
     for n in (91, 92):
         fmt[(f"AS{n}", "Util %")] = "{:.0f}%"
+        fmt[(f"AS{n}", "Yield %")] = "{:.0f}%"
         fmt[(f"AS{n}", "Lost %")] = "{:.0f}%"
         fmt[(f"AS{n}", "Picks 1+2")] = "{:,.0f}"
+        fmt[(f"AS{n}", "Robot-h")] = "{:,.0f}"
     lost_cols = [(f"AS{n}", "Lost %") for n in (91, 92)]
 
     def _row_style(row):
@@ -921,8 +961,11 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
         "Rows = every " + weekday + " in the last 4 months with data; the viewed "
         "day is highlighted (blue) and each AutoStore's best day is boxed (green). "
         "Util % = avg over the day of (all bin presentations ÷ theoretical "
-        "max/hour), purple ceiling = 100 %. Lost % = shortfall in cat 1+2 picks "
-        "vs that AutoStore's best " + weekday + " (that day = 100 %).")
+        "max/hour), purple ceiling = 100 %. Robot-h = available robot-hours "
+        "(fleet minus robots parked charging) — the capacity actually on offer, "
+        "which drives the ceiling. Yield % = cat 1+2 picks ÷ all bin presentations "
+        "(how much of the grid's activity became salable picks). Lost % = shortfall "
+        "in cat 1+2 picks vs that AutoStore's best " + weekday + " (that day = 100 %).")
 
 
 def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df,

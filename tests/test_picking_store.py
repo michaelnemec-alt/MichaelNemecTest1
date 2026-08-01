@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import picking_store as ps
 from views.prio_vs_picking import (
-    _compute_overlay, _capacity_kpis, _weekday_kpi_matrix,
+    _compute_overlay, _capacity_kpis, _weekday_kpi_matrix, _avail_robot_hours,
 )
 
 
@@ -128,6 +128,9 @@ def test_capacity_kpis():
     assert round(kpi["utilisation"], 1) == 90.0
     # whole-day cat 1+2 picks = sum of black line.
     assert kpi["picks_cat12"] == 160.0
+    # pick yield = cat 1+2 picks / all bin presentations across the whole day.
+    assert kpi["total_presentations"] == 180.0
+    assert round(kpi["pick_yield"], 4) == round(160.0 / 180.0 * 100.0, 4)
     # hours without a known ceiling are excluded from the average.
     theomax2 = [0.0] * 24
     total_bins2 = [50.0] * 24
@@ -142,6 +145,27 @@ def test_capacity_kpis():
         {"theomax": [0.0, 0.0], "total_bins": [5.0, 5.0], "bins": [5.0, 5.0]}
     ) is None
     assert _capacity_kpis(None) is None
+
+
+def test_avail_robot_hours():
+    import pandas as pd
+    from datetime import date
+
+    # 2 hours of robot-state; robot-hours = Σ(total_s − charging_unavailable_s)/3600.
+    df = pd.DataFrame({
+        "date": pd.to_datetime(["2026-06-01", "2026-06-01", "2026-06-02"]),
+        "hour": [8, 9, 8],
+        "total_s": [360000.0, 360000.0, 360000.0],  # 100 robots * 3600 s
+        "charging_unavailable_s": [36000.0, 72000.0, 0.0],
+    })
+    # day 2026-06-01: (360000-36000)/3600 + (360000-72000)/3600 = 90 + 80 = 170.
+    assert round(_avail_robot_hours(df, date(2026, 6, 1)), 1) == 170.0
+    # a day with no rows -> NaN.
+    assert _avail_robot_hours(df, date(2026, 5, 30)) != _avail_robot_hours(
+        df, date(2026, 5, 30))
+    # empty / missing frame -> NaN.
+    assert _avail_robot_hours(pd.DataFrame(), date(2026, 6, 1)) != \
+        _avail_robot_hours(pd.DataFrame(), date(2026, 6, 1))
 
 
 def test_site_aliases():
