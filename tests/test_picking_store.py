@@ -225,6 +225,8 @@ def test_weekday_kpi_matrix(monkeypatch):
     # best Friday = 500 picks, today = 300 -> 200 bins lost.
     assert df.loc[tgt_lbl, ("AS91", "Lost bins")] == 200.0
     assert df.loc[best_lbl, ("AS91", "Lost bins")] == 0.0
+    # Dig depth column is present (NaN here since util pulls are skipped).
+    assert ("AS91", "Dig depth") in df.columns
 
     # no installation mapping -> None.
     assert _weekday_kpi_matrix({}, "WH", target, with_util=False) is None

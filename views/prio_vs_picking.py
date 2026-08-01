@@ -14,7 +14,7 @@ from cubeanalytics_utils import (
     is_api_configured, get_installations, site_display_label,
     query_port_wait_time, query_port_wait_time_daily,
     query_live_jobs, query_live_robots, query_live_robot_battery,
-    query_robot_state_hourly,
+    query_robot_state_hourly, query_bins_above,
 )
 
 
@@ -443,6 +443,24 @@ def _daily_cat12_picks(inst_id, start_date, end_date):
     return d.groupby(d["date"].dt.date)["count"].sum()
 
 
+def _dig_depth(inst_id, day):
+    """Average digging depth for one AutoStore on one day = mean number of bins
+    that had to be relocated to reach a requested bin. Deeper digging is extra
+    in-grid work that never shows as a port presentation, so it drags the
+    per-robot throughput (and thus the utilisation ceiling) down without moving
+    yield. Returns NaN when unavailable."""
+    if not inst_id:
+        return float("nan")
+    try:
+        ba = query_bins_above(inst_id, str(day), str(day + timedelta(days=1)))
+    except Exception:
+        return float("nan")
+    if ba is None or ba.empty:
+        return float("nan")
+    val = ba.iloc[0]["avg_digging_depth"]
+    return float(val) if val is not None else float("nan")
+
+
 def _day_metrics(inst_id, day):
     """Whole-day capacity metrics for one AutoStore on one day: utilisation
     (grey ÷ purple, averaged), pick yield (cat 1+2 picks ÷ all bin presentations)
@@ -450,7 +468,7 @@ def _day_metrics(inst_id, day):
     robot-state (both disk-cached) so the 4-month matrix builds day by day
     without holding a long hourly window in memory. Missing data → NaN fields."""
     nan = float("nan")
-    empty = {"util": nan, "yield": nan, "robot_h": nan}
+    empty = {"util": nan, "yield": nan, "robot_h": nan, "dig_depth": nan}
     if not inst_id:
         return empty
     try:
@@ -468,6 +486,7 @@ def _day_metrics(inst_id, day):
         "util": kpi["utilisation"] if kpi else nan,
         "yield": kpi["pick_yield"] if kpi else nan,
         "robot_h": _avail_robot_hours(rob, day),
+        "dig_depth": _dig_depth(inst_id, day),
     }
 
 
@@ -521,9 +540,10 @@ def _weekday_kpi_matrix(site_map, site, target_date,
                 max(0.0, b - pk) if b and pk == pk else float("nan"))
             m = (_day_metrics(insts.get(num), d) if with_util
                  else {"util": float("nan"), "yield": float("nan"),
-                       "robot_h": float("nan")})
+                       "robot_h": float("nan"), "dig_depth": float("nan")})
             row[(f"AS{num}", "Util %")] = m["util"]
             row[(f"AS{num}", "Robot-h")] = m["robot_h"]
+            row[(f"AS{num}", "Dig depth")] = m["dig_depth"]
             row[(f"AS{num}", "Yield %")] = m["yield"]
         rows[d] = row
 
@@ -532,7 +552,7 @@ def _weekday_kpi_matrix(site_map, site, target_date,
 
     df = df.reindex(columns=pd.MultiIndex.from_tuples(
         [(f"AS{n}", m) for n in (91, 92)
-         for m in ("Util %", "Robot-h", "Yield %", "Picks 1+2",
+         for m in ("Util %", "Robot-h", "Dig depth", "Yield %", "Picks 1+2",
                    "Lost %", "Lost bins")]))
     df.index = [f"{d.strftime('%a')} {d.isoformat()}" for d in days]
     return df, {num: best_date.get(num) for num in (91, 92)}
@@ -945,6 +965,7 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
         fmt[(f"AS{n}", "Picks 1+2")] = "{:,.0f}"
         fmt[(f"AS{n}", "Lost bins")] = "{:,.0f}"
         fmt[(f"AS{n}", "Robot-h")] = "{:,.0f}"
+        fmt[(f"AS{n}", "Dig depth")] = "{:.2f}"
     lost_cols = [(f"AS{n}", "Lost %") for n in (91, 92)]
     util_cols = [(f"AS{n}", "Util %") for n in (91, 92)]
     yield_cols = [(f"AS{n}", "Yield %") for n in (91, 92)]
@@ -985,7 +1006,10 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
         "Util % = avg over the day of (all bin presentations ÷ theoretical "
         "max/hour), purple ceiling = 100 % (greener = higher). Robot-h = available robot-hours "
         "(fleet minus robots parked charging) — the capacity actually on offer, "
-        "which drives the ceiling. Yield % = cat 1+2 picks ÷ all bin presentations "
+        "which drives the ceiling. Dig depth = avg bins relocated to reach a "
+        "requested bin — deeper digging is in-grid work that lowers per-robot "
+        "throughput (and the ceiling) without changing yield, so it explains a "
+        "lower util at similar picks. Yield % = cat 1+2 picks ÷ all bin presentations "
         "(how much of the grid's activity became salable picks; greener = higher). "
         "Lost % = shortfall in cat 1+2 picks vs that AutoStore's best " + weekday +
         " (that day = 100 %). Lost bins = the same shortfall in absolute cat 1+2 "
