@@ -69,45 +69,48 @@ def test_round_trip():
     _with_store(run)
 
 
-def test_ingest_skips_days_already_stored():
-    """Re-uploading a file whose days are all already stored must not reprocess
-    them: store_dates is empty, every candidate day is reported as skipped, and
-    the oldest day is still dropped (incomplete pre-pick)."""
+def test_ingest_drops_both_ends_and_skips_stored():
+    """Both the oldest and newest day are dropped, and storable days already on
+    disk are reported as skipped rather than reprocessed."""
     def run():
         d0, d1, d2 = date(2026, 7, 23), date(2026, 7, 24), date(2026, 7, 25)
         overlay = {"91": {"prepick": [0] * 24, "sameday": [0] * 24}}
-        # d1 and d2 already on disk; d0 is only in the file as the oldest day.
+        # Only d1 is a storable middle day; it is already on disk.
         ps.save_day("hu.bud2", d1, _day_df(d1), overlay, site="X")
-        ps.save_day("hu.bud2", d2, _day_df(d2), overlay, site="X")
 
         df = pd.concat([_day_df(d0), _day_df(d1), _day_df(d2)], ignore_index=True)
-        store_dates, dropped, skipped = _ingest_upload(
+        store_dates, dropped_oldest, dropped_newest, skipped = _ingest_upload(
             df, "hu.bud2", {}, None, show_capacity=False,
             plan_by_date={}, source="f.csv",
         )
         assert store_dates == []
-        assert dropped == d0
-        assert skipped == [d1, d2]
+        assert dropped_oldest == d0
+        assert dropped_newest == d2   # current/export day never stored
+        assert skipped == [d1]
     _with_store(run)
 
 
-def test_ingest_stores_only_new_days(monkeypatch):
-    """A file overlapping the store plus a new day only processes the new day."""
+def test_ingest_stores_only_new_middle_days():
+    """A file overlapping the store plus a new settled day only processes the
+    new day; the newest (export) day is never stored."""
     def run():
-        d0, d1, d2 = date(2026, 7, 23), date(2026, 7, 24), date(2026, 7, 25)
+        d0, d1, d2, d3 = (date(2026, 7, 23), date(2026, 7, 24),
+                          date(2026, 7, 25), date(2026, 7, 26))
         overlay = {"91": {"prepick": [0] * 24, "sameday": [0] * 24}}
         ps.save_day("hu.bud2", d1, _day_df(d1), overlay, site="X")  # already stored
 
-        df = pd.concat([_day_df(d0), _day_df(d1), _day_df(d2)], ignore_index=True)
+        df = pd.concat(
+            [_day_df(d0), _day_df(d1), _day_df(d2), _day_df(d3)], ignore_index=True)
         df["prio_hour"] = df["Prioritization Time"].dt.hour
-        store_dates, dropped, skipped = _ingest_upload(
+        store_dates, dropped_oldest, dropped_newest, skipped = _ingest_upload(
             df, "hu.bud2", {}, None, show_capacity=False,
             plan_by_date={}, source="f.csv",
         )
-        assert store_dates == [d2]  # only the new day
+        assert store_dates == [d2]        # only the new middle day
         assert skipped == [d1]
-        assert dropped == d0
-        assert ps.list_dates("hu.bud2") == [d1, d2]
+        assert dropped_oldest == d0
+        assert dropped_newest == d3       # export day dropped
+        assert ps.list_dates("hu.bud2") == [d1, d2]  # d3 not stored
     _with_store(run)
 
 

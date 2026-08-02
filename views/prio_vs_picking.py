@@ -871,8 +871,12 @@ def _capacity_for_day(site_map, site, target_date, big_by_as=None, robot_by_as=N
 def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, source):
     """Store the days in the uploaded file that aren't already in the store.
 
-    The oldest day is always dropped because its pre-pick (orders finished the
-    previous day) isn't in the file, so its overlay would be incomplete.
+    Both the oldest and the newest day in the file are always dropped:
+    - the oldest has no previous day in the file, so its pre-pick overlay is
+      incomplete;
+    - the newest is the export/current day — its picking is still in progress
+      and CubeAnalytics has no capacity data for it yet, so it would be stored
+      permanently incomplete.
 
     Days already stored are skipped so re-uploading an overlapping file only
     processes the new (typically more recent) tail — recomputing overlays and
@@ -882,8 +886,9 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
     """
     need_cap = show_capacity and site
     dates = sorted(df["Finished Picking At"].dt.date.unique())
-    dropped = dates[0] if dates else None
-    candidates = dates[1:]
+    dropped_oldest = dates[0] if dates else None
+    dropped_newest = dates[-1] if len(dates) > 1 else None
+    candidates = dates[1:-1]
 
     def _needs_store(d):
         if not picking_store.has_day(warehouse, d):
@@ -895,7 +900,7 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
     skipped = [d for d in candidates if d not in store_dates]
 
     if not store_dates:
-        return store_dates, dropped, skipped
+        return store_dates, dropped_oldest, dropped_newest, skipped
 
     big_by_as = None
     robot_by_as = None
@@ -943,7 +948,7 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
         )
         prog.progress((i + 1) / len(store_dates), text=f"Stored {d}")
     prog.empty()
-    return store_dates, dropped, skipped
+    return store_dates, dropped_oldest, dropped_newest, skipped
 
 
 def _draw_capacity_kpi_table(site_map, site, target_date):
@@ -1334,19 +1339,31 @@ def _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
         target_date = date_grid_picker(
             dates, key_prefix=f"prio_cal_{warehouse}", rerun_scope="fragment")
 
-        if site and target_date == date.today():
-            if st.button("Recalculate today's peak", key="prio_recalc",
-                         help="Re-pull CubeAnalytics and overwrite only today's "
-                              "frozen capacity/peak with the current look-back "
-                              "window."):
+        if site:
+            has_cap = picking_store.has_capacity(warehouse, target_date)
+            label = ("Recalculate this day's capacity/peak" if has_cap
+                     else "Fetch this day's capacity/peak from Cube")
+            if st.button(label, key="prio_recalc",
+                         help="Re-pull CubeAnalytics for the selected day and "
+                              "overwrite its frozen capacity/peak with the "
+                              "current look-back window. Use this once Cube has "
+                              "data for a day that was stored before it was "
+                              "available."):
                 day = picking_store.load_day(warehouse, target_date)
-                cap = _capacity_for_day(site_map, site, target_date)
-                picking_store.save_day(
-                    warehouse, target_date, day["df"], day["overlay"],
-                    capacity=cap, plan=day["plan"], site=site,
-                    keep_existing_capacity=False,
-                )
-                st.rerun(scope="fragment")
+                with st.spinner(f"Recomputing capacity for {target_date}..."):
+                    cap = _capacity_for_day(site_map, site, target_date)
+                if not cap:
+                    st.warning(
+                        f"CubeAnalytics returned no capacity data for "
+                        f"{target_date} yet — try again once it's available.")
+                else:
+                    picking_store.save_day(
+                        warehouse, target_date, day["df"], day["overlay"],
+                        capacity=cap, plan=day["plan"], site=site,
+                        keep_existing_capacity=False,
+                    )
+                    st.success(f"Capacity for {target_date} refreshed.")
+                    st.rerun(scope="fragment")
 
         view = picking_store.load_day(warehouse, target_date)
         if view is None:
@@ -1513,34 +1530,37 @@ def render():
         site_map, site = _resolve_cap_site(warehouse, show_capacity)
         plan_by_date = _parse_plan(plan_file)
 
-        store_dates, dropped, skipped = _ingest_upload(
+        store_dates, dropped_oldest, dropped_newest, skipped = _ingest_upload(
             df, warehouse, site_map, site, show_capacity, plan_by_date,
             source=uploaded_file.name,
         )
+        ends = []
+        if dropped_oldest is not None:
+            ends.append(f"oldest **{dropped_oldest}** (incomplete pre-pick)")
+        if dropped_newest is not None and dropped_newest != dropped_oldest:
+            ends.append(f"newest **{dropped_newest}** (current/export day — "
+                        "still in progress, no Cube data yet)")
+        ends_msg = (" Dropped " + " and ".join(ends) + ".") if ends else ""
         if not store_dates:
             if skipped:
                 st.info(
-                    f"Nothing to store: all **{len(skipped)}** day(s) in the file "
-                    f"are already in the store for **{warehouse}** "
-                    f"(**{skipped[0]}** … **{skipped[-1]}**). Upload a file with "
-                    "newer days to add them.")
+                    f"Nothing new to store: all **{len(skipped)}** storable day(s) "
+                    f"in the file are already in the store for **{warehouse}** "
+                    f"(**{skipped[0]}** … **{skipped[-1]}**).{ends_msg} Upload a "
+                    "file with newer settled days to add them.")
                 st.session_state["prio_ingested_sig"] = sig
                 st.session_state["prio_ingested_wh"] = warehouse
                 st.session_state["prio_ingested_site"] = site
             else:
                 st.warning(
-                    f"Nothing stored: the file has only the oldest day "
-                    f"(**{dropped}**), which is always dropped because it has no "
-                    "previous day for pre-pick. Upload at least two days."
-                    if dropped is not None else "No storable days in the file.")
+                    "Nothing stored: the file has no settled days between its "
+                    f"oldest and newest.{ends_msg} Upload at least three days.")
             return
         msg = f"Stored **{len(store_dates)}** new day(s) for **{warehouse}** on the NAS."
         if skipped:
             msg += (f" Skipped **{len(skipped)}** day(s) already in the store "
                     "(not recalculated).")
-        if dropped is not None:
-            msg += (f" Oldest day **{dropped}** skipped (no previous day → "
-                    "incomplete pre-pick).")
+        msg += ends_msg
         st.session_state["prio_ingested_sig"] = sig
         st.session_state["prio_ingested_wh"] = warehouse
         st.session_state["prio_ingested_site"] = site
