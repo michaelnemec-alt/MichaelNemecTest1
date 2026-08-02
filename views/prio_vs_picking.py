@@ -1038,9 +1038,8 @@ def _draw_capacity_kpi_table(site_map, site, target_date):
         "picks (best day minus this day).")
 
 
-def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df,
-                   site_map=None):
-    """Render the metrics, per-AutoStore charts, comparison and hourly chart."""
+def _draw_day_view(view, site_map=None):
+    """Render the metrics, per-AutoStore charts and the delayed-orders table."""
     df_day = view["df"]
     target_date = view["date"]
     warehouse = view["warehouse"]
@@ -1061,23 +1060,22 @@ def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df,
     col4.metric("AutoStore 92", f"{len(df_92_scatter):,}")
     st.divider()
 
-    stats = {}
     for num, scatter in ((91, df_91_scatter), (92, df_92_scatter)):
         if num == 92:
             st.divider()
         st.markdown(f"#### AutoStore {num}")
         s = _compute_stats(scatter)
-        stats[num] = s
         if not s:
             st.warning(f"No data for AutoStore {num}")
             continue
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
         c1.metric("Total", f"{s['Total']:,}")
         c2.metric("Same-day", f"{s['Same-day']:,}")
         c3.metric("Next-day", f"{s['Next-day']:,}")
         c4.metric("On Time", f"{s['On Time %']}%")
         c5.metric("Late", f"{s['Late %']}%")
-        c6.metric("Median", f"{s['Median same-day (min)']} min")
+        c6.metric("Delayed", f"{s['Late']:,}")
+        c7.metric("Median", f"{s['Median same-day (min)']} min")
 
         ov = overlay.get(str(num))
         cap = capacity.get(str(num))
@@ -1098,47 +1096,90 @@ def _draw_day_view(view, show_comparison, show_hourly, hourly_context_df,
     if has_capacity:
         _draw_capacity_kpi_table(site_map, site, target_date)
 
-    if show_comparison and stats.get(91) and stats.get(92):
-        st.divider()
-        st.markdown("#### AS91 vs AS92 Comparison")
-        comp = pd.DataFrame({"AutoStore 91": stats[91], "AutoStore 92": stats[92]}).T
-        st.dataframe(comp, use_container_width=True)
-
-    if show_hourly:
-        _draw_hourly_distribution(hourly_context_df, warehouse)
+    _draw_delayed_orders_table(df_day, warehouse, target_date)
 
 
-def _draw_hourly_distribution(df, warehouse):
+def _draw_delayed_orders_table(df_day, warehouse, target_date):
+    """List every delayed (same-day, finished after prio) order for the day.
+
+    Sorted by AutoStore sector then Finished Picking At, showing when each order
+    was submitted to AutoStore vs its prio time so the reader can see at a glance
+    whether the delay came from a late submit (order sent to AS after its prio
+    time) or from AutoStore throughput (submitted early but still finished late).
+    """
     st.divider()
-    st.markdown("#### Hourly Pick Task Distribution")
-    df = df.copy()
-    df["hour"] = df["Finished Picking At"].dt.hour
-    hourly = (
-        df.groupby(["hour", df["AutoStore"].str.extract(r"\.(\d{2})", expand=False)])
-        .size().unstack(fill_value=0)
-    )
-    hourly.columns = [f"AS{c}" for c in hourly.columns]
+    st.markdown("#### Delayed orders")
 
-    fig_h, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 6))
-    hourly.plot(kind="bar", ax=ax1, color=["#1f77b4", "#ff7f0e"])
-    ax1.set_title(f"Pick Tasks per Hour — {warehouse}", fontsize=14, fontweight="bold")
-    ax1.set_xlabel("Hour")
-    ax1.set_ylabel("Count")
-    ax1.grid(axis="y", alpha=0.3)
+    d = df_day[(~df_day["is_next_day"]) & (df_day["diff_minutes"] < 0)].copy()
+    if d.empty:
+        st.success("No delayed orders for this day.")
+        return
 
-    hourly_pct = hourly.div(hourly.sum(axis=1), axis=0) * 100
-    hourly_pct.plot(kind="bar", stacked=True, ax=ax2, color=["#1f77b4", "#ff7f0e"])
-    ax2.set_title(f"AutoStore Share per Hour — {warehouse}", fontsize=14, fontweight="bold")
-    ax2.set_xlabel("Hour")
-    ax2.set_ylabel("Share (%)")
-    ax2.set_ylim(0, 100)
-    ax2.grid(axis="y", alpha=0.3)
+    d["Sector"] = d["AutoStore"].str.extract(r"\.(\d{2})", expand=False)
+    has_submit = "Submitted At" in d.columns and d["Submitted At"].notna().any()
+    if has_submit:
+        # + = submitted this many minutes BEFORE prio (good); - = after prio (bad).
+        d["submit_lead_min"] = (
+            (d["Prioritization Time"] - d["Submitted At"]).dt.total_seconds() / 60
+        )
+    d["late_by_min"] = -d["diff_minutes"]
 
-    plt.tight_layout()
-    st.pyplot(fig_h)
-    st.download_button("Download PNG — Hourly", data=_fig_to_bytes(fig_h),
-                       file_name=f"hourly_{warehouse}.png", mime="image/png", key="dl_hourly")
-    plt.close(fig_h)
+    d = d.sort_values(["Sector", "Finished Picking At"])
+
+    cols = {"Sector": "Sector"}
+    if "Order ID" in d.columns:
+        cols["Order ID"] = "Order ID"
+    if "Port" in d.columns:
+        cols["Port"] = "Port"
+    cols["Prioritization Time"] = "Prio time"
+    if has_submit:
+        cols["Submitted At"] = "Submitted to AS"
+    cols["Finished Picking At"] = "Finished"
+    if has_submit:
+        cols["submit_lead_min"] = "Submit lead (min)"
+    cols["late_by_min"] = "Late by (min)"
+
+    table = d[list(cols)].rename(columns=cols)
+
+    def _fmt_dt(s):
+        return pd.to_datetime(s).dt.strftime("%H:%M:%S")
+    for c in ("Prio time", "Submitted to AS", "Finished"):
+        if c in table.columns:
+            table[c] = _fmt_dt(table[c])
+    for c in ("Submit lead (min)", "Late by (min)"):
+        if c in table.columns:
+            table[c] = table[c].round(1)
+
+    def _style(row):
+        styles = pd.Series("", index=row.index)
+        # Red submit cell when the order was sent to AutoStore only after its
+        # prio time (negative lead) — i.e. the delay started before AutoStore.
+        if "Submit lead (min)" in row.index and pd.notna(row["Submit lead (min)"]):
+            if row["Submit lead (min)"] < 0:
+                red = "background-color:#f8d7da;color:#842029;font-weight:600"
+                for c in ("Submitted to AS", "Submit lead (min)"):
+                    if c in row.index:
+                        styles[c] = red
+        if "Late by (min)" in row.index:
+            styles["Late by (min)"] = "background-color:#fff3cd;color:#664d03"
+        return styles
+
+    late_submits = int((table["Submit lead (min)"] < 0).sum()) if has_submit else 0
+    st.caption(
+        f"**{len(table)}** delayed order(s) on **{target_date}**. "
+        + (f"**{late_submits}** were submitted to AutoStore *after* their prio "
+           "time (red) — the delay started before AutoStore. "
+           if has_submit else
+           "Re-upload this day to populate the AutoStore submit time. ")
+        + "*Late by* = minutes the finish ran past prio time.")
+
+    st.dataframe(table.style.apply(_style, axis=1), use_container_width=True,
+                 hide_index=True)
+    st.download_button(
+        "Download CSV — delayed orders",
+        data=table.to_csv(index=False).encode("utf-8"),
+        file_name=f"delayed_orders_{warehouse}_{target_date}.csv",
+        mime="text/csv", key="dl_delayed")
 
 
 def _live_time_axis(ax, ts, dense=False):
@@ -1320,8 +1361,7 @@ def _maybe_live_test(show_live_test, warehouse):
     _draw_live_test_section(site_map, site)
 
 
-def _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
-                       site_map, site, hourly_context_df=None):
+def _render_from_store(warehouse, show_capacity, site_map, site):
     """Date-pick and render one stored day; offer to recalculate today's peak.
 
     The picker and the day view live in a fragment so that changing the day
@@ -1375,8 +1415,7 @@ def _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
             st.warning("Stored day could not be loaded.")
             return
         view["site"] = site or view.get("site")
-        ctx = hourly_context_df if hourly_context_df is not None else view["df"]
-        _draw_day_view(view, show_comparison, show_hourly, ctx, site_map=site_map)
+        _draw_day_view(view, site_map=site_map)
 
     _pick_and_draw()
 
@@ -1430,8 +1469,6 @@ def render():
             plan_file = st.file_uploader("Upload plan file (optional)", type=["csv"],
                                           help="Semicolon-delimited (;) plan file", key="prio_plan")
         st.divider()
-        show_comparison = st.checkbox("Show AS91 vs AS92 comparison", value=True, key="prio_comp")
-        show_hourly = st.checkbox("Show hourly distribution", value=True, key="prio_hourly")
         show_capacity = st.checkbox(
             "Show hourly capacity (Bin/User time)",
             value=is_api_configured(),
@@ -1456,8 +1493,7 @@ def render():
         if show_capacity and is_api_configured():
             site_map = _installation_site_map()
             site = _default_capacity_site(site_map, hist_wh)
-        _render_from_store(hist_wh, show_comparison, show_hourly, show_capacity,
-                           site_map, site)
+        _render_from_store(hist_wh, show_capacity, site_map, site)
         _maybe_live_test(show_live_test, hist_wh)
         return
 
@@ -1500,7 +1536,7 @@ def render():
             "overlay": overlay, "capacity": capacity,
             "plan": plan_by_date.get(target_date), "site": site,
         }
-        _draw_day_view(view, show_comparison, show_hourly, df, site_map=site_map)
+        _draw_day_view(view, site_map=site_map)
         _maybe_live_test(show_live_test, warehouse)
         return
 
@@ -1575,6 +1611,5 @@ def render():
         site = st.session_state["prio_ingested_site"]
         site_map, _ = _resolve_cap_site(warehouse, show_capacity)
 
-    _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
-                       site_map, site)
+    _render_from_store(warehouse, show_capacity, site_map, site)
     _maybe_live_test(show_live_test, warehouse)

@@ -69,6 +69,26 @@ def test_round_trip():
     _with_store(run)
 
 
+def test_round_trip_keeps_submit_columns():
+    """Optional delayed-table columns (Submitted At, Order ID, ...) persist."""
+    def run():
+        d = date(2026, 7, 24)
+        df = _day_df(d).assign(**{
+            "Order ID": ["A1", "A2"],
+            "Submitted At": [_at(d, 9), _at(d, 12)],  # one before, one after prio
+            "Started Picking At": [_at(d, 9), _at(d, 12)],
+            "Port": ["CH-001", "CH-002"],
+        })
+        overlay = {"91": {"prepick": [0] * 24, "sameday": [0] * 24}}
+        ps.save_day("hu.bud2", d, df, overlay)
+        out = ps.load_day("hu.bud2", d)["df"]
+        for col in ("Order ID", "Submitted At", "Started Picking At", "Port"):
+            assert col in out.columns
+        # datetime columns round-trip as datetimes, not strings.
+        assert pd.api.types.is_datetime64_any_dtype(out["Submitted At"])
+    _with_store(run)
+
+
 def test_ingest_drops_both_ends_and_skips_stored():
     """Both the oldest and newest day are dropped, and storable days already on
     disk are reported as skipped rather than reprocessed."""

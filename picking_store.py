@@ -28,6 +28,11 @@ _STORE_DIR = Path(
 )
 
 _BASE_COLS = ["AutoStore", "Type", "Prioritization Time", "Finished Picking At"]
+# Extra columns kept when present so the delayed-orders table can show when an
+# order was submitted to AutoStore and how that lines up with its prio time.
+_EXTRA_COLS = ["Order ID", "Submitted At", "Started Picking At", "Port"]
+_DT_COLS = ("Prioritization Time", "Finished Picking At",
+            "Submitted At", "Started Picking At")
 
 
 def _wh_dir(warehouse):
@@ -102,9 +107,9 @@ def save_day(warehouse, day, df_day, overlay, capacity=None, plan=None,
     wh = _wh_dir(warehouse)
     wh.mkdir(parents=True, exist_ok=True)
 
-    cols = [c for c in _BASE_COLS if c in df_day.columns]
+    cols = [c for c in (_BASE_COLS + _EXTRA_COLS) if c in df_day.columns]
     out = df_day[cols].copy()
-    for c in ("Prioritization Time", "Finished Picking At"):
+    for c in _DT_COLS:
         if c in out.columns:
             out[c] = pd.to_datetime(out[c], errors="coerce")
     out.to_parquet(_parquet_path(warehouse, day), index=False)
@@ -139,7 +144,7 @@ def load_day(warehouse, day):
     if not ppath.exists():
         return None
     df = pd.read_parquet(ppath)
-    for c in ("Prioritization Time", "Finished Picking At"):
+    for c in _DT_COLS:
         if c in df.columns:
             df[c] = pd.to_datetime(df[c], errors="coerce")
     df = df.dropna(subset=["Prioritization Time", "Finished Picking At"])
