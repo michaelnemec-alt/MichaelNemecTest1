@@ -880,11 +880,14 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
 
     Days already stored are skipped so re-uploading an overlapping file only
     processes the new (typically more recent) tail — recomputing overlays and
-    rewriting parquet for days already on the NAS is the main upload cost. The
-    one exception is a stored day still missing its frozen capacity: when the
-    capacity overlay is requested we reprocess just that day to backfill it.
+    rewriting parquet for days already on the NAS is the main upload cost. Two
+    exceptions force a stored day to be reprocessed: it is missing its frozen
+    capacity (and capacity is requested), or it was stored before the submit
+    timestamp was persisted while the current file carries it — re-storing then
+    backfills the delayed-orders table's "Submitted to AS" column.
     """
     need_cap = show_capacity and site
+    upload_has_submit = "Submitted At" in df.columns
     dates = sorted(df["Finished Picking At"].dt.date.unique())
     dropped_oldest = dates[0] if dates else None
     dropped_newest = dates[-1] if len(dates) > 1 else None
@@ -892,6 +895,9 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
 
     def _needs_store(d):
         if not picking_store.has_day(warehouse, d):
+            return True
+        # Refresh a day stored before the submit timestamp existed.
+        if upload_has_submit and not picking_store.has_submit_col(warehouse, d):
             return True
         # Backfill capacity for an already-stored day that lacks it.
         return bool(need_cap and not picking_store.has_capacity(warehouse, d))

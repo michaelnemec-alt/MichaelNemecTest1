@@ -92,6 +92,34 @@ def has_capacity(warehouse, day):
     return bool(_read_meta(warehouse, day).get("capacity"))
 
 
+def stored_columns(warehouse, day):
+    """Column names in the stored parquet for a day (empty list if absent).
+
+    Reads only the parquet schema, not the row data, so it is cheap to call
+    while deciding whether a day already on disk needs re-storing.
+    """
+    ppath = _parquet_path(warehouse, day)
+    if not ppath.exists():
+        return []
+    try:
+        import pyarrow.parquet as pq
+        return list(pq.ParquetFile(ppath).schema.names)
+    except Exception:
+        try:
+            return list(pd.read_parquet(ppath).columns)
+        except Exception:
+            return []
+
+
+def has_submit_col(warehouse, day):
+    """True if the stored day already carries the AutoStore submit timestamp.
+
+    Days stored before the delayed-orders table existed lack ``Submitted At``;
+    re-uploading such a day should refresh it rather than skip it.
+    """
+    return "Submitted At" in stored_columns(warehouse, day)
+
+
 def save_day(warehouse, day, df_day, overlay, capacity=None, plan=None,
              source=None, site=None, keep_existing_capacity=True):
     """Persist one day's picking rows + overlay, freezing capacity on first write.

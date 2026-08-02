@@ -134,6 +134,33 @@ def test_ingest_stores_only_new_middle_days():
     _with_store(run)
 
 
+def test_ingest_restores_day_missing_submit_column():
+    """A day stored before submit-time existed is re-stored (not skipped) when a
+    later upload carries the ``Submitted At`` column, backfilling it."""
+    def run():
+        d0, d1, d2 = date(2026, 7, 23), date(2026, 7, 24), date(2026, 7, 25)
+        overlay = {"91": {"prepick": [0] * 24, "sameday": [0] * 24}}
+        # d1 stored the old way: base columns only, no Submitted At.
+        ps.save_day("hu.bud2", d1, _day_df(d1), overlay, site="X")
+        assert not ps.has_submit_col("hu.bud2", d1)
+
+        def _with_submit(day):
+            return _day_df(day).assign(**{"Submitted At": [_at(day, 7), _at(day, 8)]})
+
+        df = pd.concat([_with_submit(d0), _with_submit(d1), _with_submit(d2)],
+                       ignore_index=True)
+        df["prio_hour"] = df["Prioritization Time"].dt.hour
+        store_dates, _, _, skipped = _ingest_upload(
+            df, "hu.bud2", {}, None, show_capacity=False,
+            plan_by_date={}, source="f.csv",
+        )
+        assert store_dates == [d1]   # re-stored to gain the submit column
+        assert skipped == []
+        assert ps.has_submit_col("hu.bud2", d1)
+        assert "Submitted At" in ps.load_day("hu.bud2", d1)["df"].columns
+    _with_store(run)
+
+
 def test_capacity_frozen_then_reused():
     def run():
         d = date(2026, 7, 24)
