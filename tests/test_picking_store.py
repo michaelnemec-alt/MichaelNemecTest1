@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import picking_store as ps
 from views.prio_vs_picking import (
     _compute_overlay, _capacity_kpis, _weekday_kpi_matrix, _avail_robot_hours,
+    _ingest_upload,
 )
 
 
@@ -65,6 +66,48 @@ def test_round_trip():
             assert col in view["df"].columns
         assert view["plan"] == {10: 5.0}
         assert view["site"] == "Biatorbágy"
+    _with_store(run)
+
+
+def test_ingest_skips_days_already_stored():
+    """Re-uploading a file whose days are all already stored must not reprocess
+    them: store_dates is empty, every candidate day is reported as skipped, and
+    the oldest day is still dropped (incomplete pre-pick)."""
+    def run():
+        d0, d1, d2 = date(2026, 7, 23), date(2026, 7, 24), date(2026, 7, 25)
+        overlay = {"91": {"prepick": [0] * 24, "sameday": [0] * 24}}
+        # d1 and d2 already on disk; d0 is only in the file as the oldest day.
+        ps.save_day("hu.bud2", d1, _day_df(d1), overlay, site="X")
+        ps.save_day("hu.bud2", d2, _day_df(d2), overlay, site="X")
+
+        df = pd.concat([_day_df(d0), _day_df(d1), _day_df(d2)], ignore_index=True)
+        store_dates, dropped, skipped = _ingest_upload(
+            df, "hu.bud2", {}, None, show_capacity=False,
+            plan_by_date={}, source="f.csv",
+        )
+        assert store_dates == []
+        assert dropped == d0
+        assert skipped == [d1, d2]
+    _with_store(run)
+
+
+def test_ingest_stores_only_new_days(monkeypatch):
+    """A file overlapping the store plus a new day only processes the new day."""
+    def run():
+        d0, d1, d2 = date(2026, 7, 23), date(2026, 7, 24), date(2026, 7, 25)
+        overlay = {"91": {"prepick": [0] * 24, "sameday": [0] * 24}}
+        ps.save_day("hu.bud2", d1, _day_df(d1), overlay, site="X")  # already stored
+
+        df = pd.concat([_day_df(d0), _day_df(d1), _day_df(d2)], ignore_index=True)
+        df["prio_hour"] = df["Prioritization Time"].dt.hour
+        store_dates, dropped, skipped = _ingest_upload(
+            df, "hu.bud2", {}, None, show_capacity=False,
+            plan_by_date={}, source="f.csv",
+        )
+        assert store_dates == [d2]  # only the new day
+        assert skipped == [d1]
+        assert dropped == d0
+        assert ps.list_dates("hu.bud2") == [d1, d2]
     _with_store(run)
 
 

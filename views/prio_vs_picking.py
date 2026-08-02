@@ -869,19 +869,36 @@ def _capacity_for_day(site_map, site, target_date, big_by_as=None, robot_by_as=N
 
 
 def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, source):
-    """Store every day in the uploaded file except the oldest.
+    """Store the days in the uploaded file that aren't already in the store.
 
-    The oldest day is dropped because its pre-pick (orders finished the previous
-    day) isn't in the file, so its overlay would be incomplete. Frozen capacity
-    is computed only for days that don't already have it.
+    The oldest day is always dropped because its pre-pick (orders finished the
+    previous day) isn't in the file, so its overlay would be incomplete.
+
+    Days already stored are skipped so re-uploading an overlapping file only
+    processes the new (typically more recent) tail — recomputing overlays and
+    rewriting parquet for days already on the NAS is the main upload cost. The
+    one exception is a stored day still missing its frozen capacity: when the
+    capacity overlay is requested we reprocess just that day to backfill it.
     """
+    need_cap = show_capacity and site
     dates = sorted(df["Finished Picking At"].dt.date.unique())
     dropped = dates[0] if dates else None
-    store_dates = dates[1:]
+    candidates = dates[1:]
+
+    def _needs_store(d):
+        if not picking_store.has_day(warehouse, d):
+            return True
+        # Backfill capacity for an already-stored day that lacks it.
+        return bool(need_cap and not picking_store.has_capacity(warehouse, d))
+
+    store_dates = [d for d in candidates if _needs_store(d)]
+    skipped = [d for d in candidates if d not in store_dates]
+
+    if not store_dates:
+        return store_dates, dropped, skipped
 
     big_by_as = None
     robot_by_as = None
-    need_cap = show_capacity and site
     to_freeze = [d for d in store_dates if not picking_store.has_capacity(warehouse, d)]
     if need_cap and to_freeze:
         span_start = min(to_freeze) - timedelta(days=60)
@@ -926,7 +943,7 @@ def _ingest_upload(df, warehouse, site_map, site, show_capacity, plan_by_date, s
         )
         prog.progress((i + 1) / len(store_dates), text=f"Stored {d}")
     prog.empty()
-    return store_dates, dropped
+    return store_dates, dropped, skipped
 
 
 def _draw_capacity_kpi_table(site_map, site, target_date):
@@ -1496,19 +1513,31 @@ def render():
         site_map, site = _resolve_cap_site(warehouse, show_capacity)
         plan_by_date = _parse_plan(plan_file)
 
-        store_dates, dropped = _ingest_upload(
+        store_dates, dropped, skipped = _ingest_upload(
             df, warehouse, site_map, site, show_capacity, plan_by_date,
             source=uploaded_file.name,
         )
         if not store_dates:
-            st.warning(
-                f"Nothing stored: the file has only the oldest day (**{dropped}**), "
-                "which is always dropped because it has no previous day for pre-pick. "
-                "Upload at least two days."
-                if dropped is not None else "No storable days in the file."
-            )
+            if skipped:
+                st.info(
+                    f"Nothing to store: all **{len(skipped)}** day(s) in the file "
+                    f"are already in the store for **{warehouse}** "
+                    f"(**{skipped[0]}** … **{skipped[-1]}**). Upload a file with "
+                    "newer days to add them.")
+                st.session_state["prio_ingested_sig"] = sig
+                st.session_state["prio_ingested_wh"] = warehouse
+                st.session_state["prio_ingested_site"] = site
+            else:
+                st.warning(
+                    f"Nothing stored: the file has only the oldest day "
+                    f"(**{dropped}**), which is always dropped because it has no "
+                    "previous day for pre-pick. Upload at least two days."
+                    if dropped is not None else "No storable days in the file.")
             return
-        msg = f"Stored **{len(store_dates)}** day(s) for **{warehouse}** on the NAS."
+        msg = f"Stored **{len(store_dates)}** new day(s) for **{warehouse}** on the NAS."
+        if skipped:
+            msg += (f" Skipped **{len(skipped)}** day(s) already in the store "
+                    "(not recalculated).")
         if dropped is not None:
             msg += (f" Oldest day **{dropped}** skipped (no previous day → "
                     "incomplete pre-pick).")
