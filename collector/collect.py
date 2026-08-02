@@ -11,11 +11,18 @@ import json
 import logging
 import os
 import signal
+import time
 
 import requests
 import websockets
 
 from collector.raw_store import RawStore
+
+# Liveness marker touched while the collector is connected and receiving. The
+# container healthcheck (see docker-compose.yml) checks its freshness, because
+# the collector runs the shared app image but has no HTTP server for the
+# image's default Streamlit healthcheck to probe.
+HEARTBEAT_FILENAME = ".heartbeat"
 
 REST_BASE_URL = "https://api.cubeanalytics.autostoresystem.com/v1"
 CONNECT_URL = "https://live.cubeanalytics.autostoresystem.com/connect"
@@ -27,18 +34,32 @@ RECV_TIMEOUT_SECONDS = 120
 BACKOFF_START_SECONDS = 2
 BACKOFF_MAX_SECONDS = 60
 
-# Event types the REST backfill iterates. The WebSocket delivers whatever the
-# installation emits regardless of this list.
+# Event types the REST backfill iterates. CHARGER_STATE and STATUS are
+# WebSocket-only — the REST live-events-stream rejects them with HTTP 400 — so
+# they are intentionally excluded here (they still arrive live over the
+# WebSocket). The WebSocket delivers whatever the installation emits regardless
+# of this list.
 BACKFILL_EVENT_TYPES = (
     "SYSTEM_MODE", "ROBOT_STATE", "ROBOT_ERROR", "BIN_AND_TASK",
     "PORT_ERROR", "PORT_RETRY", "DOOR_STATE", "PORT_STATE",
-    "INCIDENT", "DELAYED_SYSTEM_STOP", "CHARGER_STATE", "STATUS",
+    "INCIDENT", "DELAYED_SYSTEM_STOP",
 )
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
 logger = logging.getLogger("collector")
+
+
+def _touch_heartbeat(root):
+    """Record that the collector is alive by updating the heartbeat file mtime."""
+    try:
+        os.makedirs(root, exist_ok=True)
+        path = os.path.join(root, HEARTBEAT_FILENAME)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(str(int(time.time())))
+    except OSError as exc:
+        logger.warning("could not write heartbeat: %s", exc)
 
 
 def _token():
@@ -111,6 +132,7 @@ async def _stream_once(store, token, installations, stop_event):
         ping_interval=30, ping_timeout=30,
     ) as ws:
         logger.info("WebSocket connected")
+        _touch_heartbeat(store.root)
         deadline = asyncio.get_event_loop().time() + WS_REFRESH_SECONDS
         while not stop_event.is_set():
             remaining = deadline - asyncio.get_event_loop().time()
@@ -122,7 +144,9 @@ async def _stream_once(store, token, installations, stop_event):
                     ws.recv(), timeout=min(RECV_TIMEOUT_SECONDS, remaining)
                 )
             except asyncio.TimeoutError:
+                _touch_heartbeat(store.root)  # idle but alive
                 continue
+            _touch_heartbeat(store.root)
             try:
                 obj = json.loads(raw)
             except json.JSONDecodeError:

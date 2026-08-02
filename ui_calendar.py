@@ -27,10 +27,21 @@ def date_grid_picker(dates, key_prefix, rerun_scope="app"):
         "font-size:0.85rem !important;line-height:1.1 !important;margin:0 !important}"
         "</style>")
     available = set(dates)
+    newest = dates[-1]
     sel_key = f"{key_prefix}_sel"
     view_key = f"{key_prefix}_view"
+    max_key = f"{key_prefix}_max"
+    # Land on the newest day with data on first render, and follow it forward
+    # whenever a newer day appears (e.g. the collector picks up a new day) — so
+    # the picker never stays stuck on an older month. A manual selection of an
+    # existing day is still respected until the data set grows past it.
+    prev_max = st.session_state.get(max_key)
+    if prev_max is None or newest > prev_max:
+        st.session_state[sel_key] = newest
+        st.session_state[view_key] = (newest.year, newest.month)
+    st.session_state[max_key] = newest
     if st.session_state.get(sel_key) not in available:
-        st.session_state[sel_key] = dates[-1]
+        st.session_state[sel_key] = newest
     selected = st.session_state[sel_key]
     if view_key not in st.session_state:
         st.session_state[view_key] = (selected.year, selected.month)

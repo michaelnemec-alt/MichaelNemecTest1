@@ -15,6 +15,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+import raw_events
+
 BASE_URL = "https://api.cubeanalytics.autostoresystem.com/v1"
 
 # --- Per-day on-disk cache -------------------------------------------------
@@ -1181,11 +1183,13 @@ def query_module_device_versions(installation_id, date_from_str, date_to_str):
     return df
 
 
-# --- Live event stream (BIN_AND_TASK / ROBOT_STATE, last ~48h, 5-min) ------
-# Unlike the daily REST endpoints, live-events-stream is a short-retention
-# repository of the WebSocket events: only the last 48h (lastHours) or a max
-# 3-day window is available, so this is a rolling live view, not history. The
-# response is a bare JSON list of events (no results/next pagination wrapper).
+# --- Live event stream (BIN_AND_TASK / ROBOT_STATE, 5-min) -----------------
+# The REST live-events-stream is a short-retention repository of the WebSocket
+# events: only the last 48h (lastHours) or a max 3-day window is available, and
+# the response is a bare JSON list of events (no results/next pagination). To
+# see more than that, events are served from the collector store when mounted
+# (full retained history) and the REST ~48h window is merged on top for
+# freshness; without the store we fall back to REST only.
 
 # Robot state buckets we surface as "avg concurrent robots" per 5-min window.
 _ROBOT_STATE_KEYS = (
@@ -1224,17 +1228,54 @@ def _fetch_live_events(installation_id, last_hours, event_type):
     return [e for e in data if isinstance(e, dict) and e.get("event_type") == event_type]
 
 
+def _live_events(installation_id, last_hours, event_type):
+    """Events for one installation/type, preferring the collector store.
+
+    The REST ``live-events-stream`` only retains ~48h, so on its own the live
+    views can never show more than two days. The night collector, however,
+    writes every WebSocket event to an append-only store with no expiry. When
+    that store is mounted we serve the **full retained history** from it and
+    still merge the REST window on top for the freshest few minutes (the store
+    can lag by one WebSocket batch). Events are de-duplicated by ``uuid`` so the
+    overlap never double-counts. Without the store we fall back to REST only.
+    """
+    if not raw_events.is_available():
+        return _fetch_live_events(installation_id, last_hours, event_type)
+
+    merged = {}
+    fallback_key = 0
+    for e in raw_events.read_stream_events(installation_id, event_type):
+        if not isinstance(e, dict) or e.get("event_type") != event_type:
+            continue
+        uid = e.get("uuid")
+        if uid is None:
+            uid = f"_noid_{fallback_key}"
+            fallback_key += 1
+        merged[uid] = e
+    try:
+        for e in _fetch_live_events(installation_id, last_hours, event_type):
+            uid = e.get("uuid")
+            if uid is None:
+                uid = f"_noid_{fallback_key}"
+                fallback_key += 1
+            merged.setdefault(uid, e)
+    except requests.RequestException:
+        pass  # store history is enough; skip the freshness top-up on API error
+    return list(merged.values())
+
+
 @st.cache_data(ttl=_LIVE_TTL_SECONDS, max_entries=_CACHE_MAX_ENTRIES)
 def query_live_jobs(installation_id, last_hours=48):
     """Bin-and-task job counts per 5-min live event for one installation.
 
     Columns: ts (tz-aware), created, updated, deleted, completed, active,
-    total, unique, total_prepared, unique_prepared. Rolling last ~48h only.
+    total, unique, total_prepared, unique_prepared. Full collector history
+    when the store is mounted, else the REST rolling ~48h.
     """
     fields = ("active", "total", "unique", "total_prepared", "unique_prepared",
               "created", "updated", "deleted", "completed")
     rows = []
-    for e in _fetch_live_events(installation_id, last_hours, "BIN_AND_TASK"):
+    for e in _live_events(installation_id, last_hours, "BIN_AND_TASK"):
         d = e.get("data", {})
         row = {"ts": e.get("local_installation_timestamp")}
         for f in fields:
@@ -1252,10 +1293,11 @@ def query_live_robot_battery(installation_id, last_hours=48):
     """Per-robot battery % over time from the ROBOT_STATE live event.
 
     Returns a wide DataFrame: index-less with a 'ts' column and one column per
-    robot_id holding its battery %. Rolling last ~48h only.
+    robot_id holding its battery %. Full collector history when the store is
+    mounted, else the REST rolling ~48h.
     """
     rows = []
-    for e in _fetch_live_events(installation_id, last_hours, "ROBOT_STATE"):
+    for e in _live_events(installation_id, last_hours, "ROBOT_STATE"):
         ts = e.get("local_installation_timestamp")
         for r in e.get("data", {}).get("robots", []):
             b = r.get("battery")
@@ -1280,10 +1322,11 @@ def query_live_robots(installation_id, last_hours=48):
 
     Each state column is the average number of robots concurrently in that
     state during the window (sum of per-robot seconds in state / window span).
-    battery_avg is the mean battery % across robots. Rolling last ~48h only.
+    battery_avg is the mean battery % across robots. Full collector history
+    when the store is mounted, else the REST rolling ~48h.
     """
     rows = []
-    for e in _fetch_live_events(installation_id, last_hours, "ROBOT_STATE"):
+    for e in _live_events(installation_id, last_hours, "ROBOT_STATE"):
         robots = e.get("data", {}).get("robots", [])
         if not robots:
             continue
@@ -1328,10 +1371,11 @@ def query_live_event_table(installation_id, event_type, last_hours=48):
     For array-valued events (DOOR_STATE door_states, ROBOT_STATE robots, …)
     each nested record becomes a row with a parsed 'ts'; scalar events (e.g.
     SYSTEM_MODE, INCIDENT, DELAYED_SYSTEM_STOP) give one row per event.
-    Returns a DataFrame sorted by ts. Rolling last ~48h only.
+    Returns a DataFrame sorted by ts. Full collector history when the store
+    is mounted, else the REST rolling ~48h.
     """
     rows = []
-    for e in _fetch_live_events(installation_id, last_hours, event_type):
+    for e in _live_events(installation_id, last_hours, event_type):
         ts = e.get("local_installation_timestamp")
         for rec in _flatten_event_data(e.get("data", {})):
             rows.append({"ts": ts, **rec})

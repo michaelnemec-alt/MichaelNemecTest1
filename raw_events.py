@@ -54,6 +54,29 @@ def _iter_event_lines(installation_id, event_type, days):
                     continue
 
 
+def read_stream_events(installation_id, event_type):
+    """Yield every stored raw event for one installation/type across all day
+    files in the collector store — the full retained history, independent of
+    the box clock (unlike ``_iter_event_lines`` which windows by ``date.today``).
+    Yields nothing when the store is not mounted or has no data for the type."""
+    root = raw_events_dir()
+    if not root:
+        return
+    base = Path(root) / str(installation_id) / event_type
+    if not base.is_dir():
+        return
+    for path in sorted(base.glob("*.ndjson")):
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+
 _CHARGER_STATES = ("on", "off", "charging", "error")
 
 

@@ -109,7 +109,39 @@ def test_last_hours_cutoff_and_missing_dir():
     assert raw_events.read_charger_state("Z", 48).empty
 
 
+def test_read_stream_events_spans_all_day_files():
+    with tempfile.TemporaryDirectory() as root:
+        os.environ["RAW_EVENTS_DIR"] = root
+        try:
+            inst = "INSTZ"
+
+            def bt(day, ts, uid):
+                return {
+                    "installation_id": inst, "event_type": "BIN_AND_TASK",
+                    "uuid": uid, "date": day,
+                    "local_installation_timestamp": ts,
+                    "data": {"total": 1},
+                }
+
+            d = os.path.join(root, inst, "BIN_AND_TASK")
+            os.makedirs(d, exist_ok=True)
+            # Two day files, well outside any date.today() window, to prove the
+            # reader is clock-independent (unlike read_charger_state).
+            with open(os.path.join(d, "2020-01-01.ndjson"), "w") as fh:
+                fh.write(json.dumps(bt("2020-01-01", "2020-01-01T00:00:00+00:00", "a")) + "\n")
+            with open(os.path.join(d, "2020-01-02.ndjson"), "w") as fh:
+                fh.write(json.dumps(bt("2020-01-02", "2020-01-02T00:00:00+00:00", "b")) + "\n")
+
+            events = list(raw_events.read_stream_events(inst, "BIN_AND_TASK"))
+            assert [e["uuid"] for e in events] == ["a", "b"]
+            # Unknown installation / missing store -> empty, never raises.
+            assert list(raw_events.read_stream_events("NOPE", "BIN_AND_TASK")) == []
+        finally:
+            del os.environ["RAW_EVENTS_DIR"]
+
+
 if __name__ == "__main__":
     test_read_and_concurrent()
     test_last_hours_cutoff_and_missing_dir()
+    test_read_stream_events_spans_all_day_files()
     print("ok")
