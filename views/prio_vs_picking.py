@@ -1350,6 +1350,11 @@ def _render_from_store(warehouse, show_comparison, show_hourly, show_capacity,
                               "data for a day that was stored before it was "
                               "available."):
                 day = picking_store.load_day(warehouse, target_date)
+                # Force a fresh CubeAnalytics fetch: the query results are
+                # memoised for 24h, so without clearing them a day first read
+                # before Cube had data would keep returning that empty result.
+                query_port_wait_time.clear()
+                query_robot_state_hourly.clear()
                 with st.spinner(f"Recomputing capacity for {target_date}..."):
                     cap = _capacity_for_day(site_map, site, target_date)
                 if not cap:
