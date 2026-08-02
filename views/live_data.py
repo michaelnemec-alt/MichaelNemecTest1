@@ -18,6 +18,7 @@ from cubeanalytics_utils import (
     query_live_event_table, query_access_point_load,
 )
 import raw_events
+from ui_calendar import date_grid_picker
 
 _ACCESS_POINT_LOAD = "ACCESS_POINT_LOAD"
 _CHARGER_STATE = "CHARGER_STATE"
@@ -132,10 +133,8 @@ def _day_picker(df, key):
     days = _days_of(df)
     if not days:
         return None
-    labels = {d.strftime("%a %d %b"): d for d in days}
-    choice = st.radio("Day", list(labels.keys()), index=len(labels) - 1,
-                      horizontal=True, key=key)
-    return labels[choice]
+    st.markdown("**Day** — shaded days have data")
+    return date_grid_picker(days, key_prefix=key)
 
 
 def _filter_day(df, day):
