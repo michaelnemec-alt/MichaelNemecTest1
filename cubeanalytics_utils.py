@@ -242,6 +242,35 @@ def _write_day(path, objs):
         pass  # cache is best-effort; a write failure just means a re-fetch later
 
 
+def clear_day_cache(day=None):
+    """Delete per-day disk-cache files so the next query re-fetches from the API.
+
+    The Streamlit ``@st.cache_data`` memo is only the outer layer; ``_fetch_days``
+    keeps its own on-disk per-day cache that ``.clear()`` does NOT touch. A day
+    first fetched while the API had no data for it (e.g. it was still "today")
+    gets stored empty and, once older than ``_REFRESH_TAIL_DAYS``, is treated as
+    immutable and served empty forever. The Recalculate button must call this to
+    genuinely force a fresh pull.
+
+    day : a ``date`` to clear across every installation/endpoint; None wipes the
+          whole per-day cache.
+    """
+    if not _DAY_CACHE_DIR.exists():
+        return 0
+    removed = 0
+    if day is None:
+        pattern = "*.json"
+    else:
+        pattern = f"{day.isoformat()}.json"
+    for path in _DAY_CACHE_DIR.rglob(pattern):
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def _day_of(obj):
     d = obj.get("date")
     if not d:

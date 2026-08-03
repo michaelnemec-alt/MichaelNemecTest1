@@ -14,7 +14,7 @@ from cubeanalytics_utils import (
     is_api_configured, get_installations, site_display_label,
     query_port_wait_time, query_port_wait_time_daily,
     query_live_jobs, query_live_robots, query_live_robot_battery,
-    query_robot_state_hourly, query_bins_above,
+    query_robot_state_hourly, query_bins_above, clear_day_cache,
 )
 
 
@@ -1396,11 +1396,13 @@ def _render_from_store(warehouse, show_capacity, site_map, site):
                               "data for a day that was stored before it was "
                               "available."):
                 day = picking_store.load_day(warehouse, target_date)
-                # Force a fresh CubeAnalytics fetch: the query results are
-                # memoised for 24h, so without clearing them a day first read
-                # before Cube had data would keep returning that empty result.
+                # Force a fresh CubeAnalytics fetch. Two cache layers must be
+                # cleared: the 24h st.cache_data memo, AND the per-day disk
+                # cache in _fetch_days — a day first read before Cube had data
+                # is frozen empty on disk and served forever otherwise.
                 query_port_wait_time.clear()
                 query_robot_state_hourly.clear()
+                clear_day_cache(target_date)
                 with st.spinner(f"Recomputing capacity for {target_date}..."):
                     cap = _capacity_for_day(site_map, site, target_date)
                 if not cap:
