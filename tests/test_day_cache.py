@@ -140,6 +140,23 @@ def test_recent_tail_refetched_when_stale():
     _with_cache(run)
 
 
+def test_clear_day_cache_forces_refetch():
+    def run(rec):
+        # Prime the cache for an immutable past window.
+        c._fetch_days(URL, {"after": _iso(PAST_FROM), "before": _iso(PAST_TO)})
+        rec.calls.clear()
+        target = PAST_FROM + timedelta(days=2)
+        # Without clearing, that day is served from disk (no network).
+        c._fetch_days(URL, {"after": _iso(target), "before": _iso(target)})
+        assert not rec.calls, "cached immutable day must not re-fetch on its own"
+        # Clearing just that day forces a fresh pull for it.
+        removed = c.clear_day_cache(target)
+        assert removed >= 1
+        c._fetch_days(URL, {"after": _iso(target), "before": _iso(target)})
+        assert target in rec.fetched_days, "cleared day must be re-fetched from network"
+    _with_cache(run)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
