@@ -1395,20 +1395,82 @@ def _view_sort_test(date_from_str, date_to_str, aggregation):
         st.caption(f"Period: {period_label}")
 
 
+def _render_fleet_snapshot(df_per_robot):
+    """Top table: robots per site and how many are out of service.
+
+    Uses the latest day in the selected range. robot-state is hourly, so each
+    robot's seconds are summed across the day; a robot counts as "out of
+    service" when it spent the majority of its tracked time in
+    SERVICE_ON_GRID + SERVICE_OFF_GRID that day.
+    """
+    if df_per_robot is None or df_per_robot.empty:
+        return
+
+    latest = df_per_robot["date"].max()
+    snap = df_per_robot[df_per_robot["date"] == latest]
+    per_robot = snap.groupby(["site", "robot_id"], as_index=False).agg(
+        service_on=("service_on_grid", "sum"),
+        service_off=("service_off_grid", "sum"),
+        total=("total_time_s", "sum"),
+    )
+    per_robot["service_s"] = per_robot["service_on"] + per_robot["service_off"]
+    per_robot["out"] = per_robot["service_s"] >= 0.5 * per_robot["total"].clip(lower=1)
+
+    table = per_robot.groupby("site", as_index=False).agg(
+        Robots=("robot_id", "nunique"),
+        out=("out", "sum"),
+    )
+    table["Site"] = table["site"].map(_short_site)
+    table["Out of service"] = table["out"].astype(int)
+    table["In service (off grid)"] = (
+        per_robot[per_robot["service_off"] > 0]
+        .groupby("site")["robot_id"].nunique()
+        .reindex(table["site"]).fillna(0).astype(int).values
+    )
+    table = table[["Site", "Robots", "Out of service", "In service (off grid)"]] \
+        .sort_values("Site").reset_index(drop=True)
+
+    tot_robots = int(table["Robots"].sum())
+    tot_out = int(table["Out of service"].sum())
+    latest_str = pd.to_datetime(latest).date().isoformat() if pd.notnull(latest) else "?"
+    st.markdown(f"**Fleet snapshot — {latest_str}** · {tot_robots} robots · {tot_out} out of service")
+    st.dataframe(
+        table,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Robots": st.column_config.NumberColumn("Robots", help="Distinct robots reporting state on the latest day."),
+            "Out of service": st.column_config.NumberColumn(
+                "Out of service",
+                help="Robots that spent the majority of the day in service (on + off grid).",
+            ),
+            "In service (off grid)": st.column_config.NumberColumn(
+                "In service (off grid)",
+                help="Robots physically lifted off the grid at some point that day (manual intervention).",
+            ),
+        },
+    )
+    st.divider()
+
+
 def _view_module_robots(date_from_str, date_to_str, aggregation):
     with st.spinner("Loading robot metrics..."):
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             f_robot = pool.submit(_load_for_sites, query_robot_state, date_from_str, date_to_str)
             f_health = pool.submit(_load_for_sites, query_system_health, date_from_str, date_to_str)
             f_errors = pool.submit(_load_for_sites, query_robot_errors, date_from_str, date_to_str)
+            f_perrobot = pool.submit(_load_for_sites, query_robot_state_per_robot, date_from_str, date_to_str)
         df_robot = f_robot.result()
         df_health = f_health.result()
         df_robot_errors = f_errors.result()
+        df_per_robot = f_perrobot.result()
 
     st.markdown("#### Robots")
     if df_robot.empty and df_health.empty:
         st.warning("No robot data returned.")
         return
+
+    _render_fleet_snapshot(df_per_robot)
 
     if not df_robot.empty and "robot_availability_pct" in df_robot.columns:
         pivot = _aggregate_pivot(df_robot, "robot_availability_pct", aggregation)
