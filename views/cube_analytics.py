@@ -1829,15 +1829,17 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
 
     st.caption(
         f"Charging time per day vs distance travelled per day, one dot per robot, across "
-        f"the whole fleet (gray). Fixed trailing **{_BATTERY_SNAPSHOT_DAYS} days** "
-        f"({snap_from:%Y-%m-%d} – {snap_to:%Y-%m-%d}), independent of the date filter in "
-        f"the sidebar (that's shared by every other chart on this page). Use "
+        f"the whole fleet. Even with no site highlighted, background dots are grey "
+        f"(●, Standard: R5/R5+/R5.1/R5.1+) vs purple (◆, Pro: any variant with 'Pro' in "
+        f"the name) — same battery/charger hardware split, so you can see where Pro "
+        f"robots cluster vs Standard at a glance. Fixed trailing **{_BATTERY_SNAPSHOT_DAYS} "
+        f"days** ({snap_from:%Y-%m-%d} – {snap_to:%Y-%m-%d}), independent of the date "
+        f"filter in the sidebar (that's shared by every other chart on this page). Use "
         f"**Highlight site(s)** in the left sidebar to bring one or more sites to the "
-        f"front in colour — same control used on every other CUBE Analytics chart. A "
-        f"robot that charges much longer than others covering similar distance is a "
-        f"battery-health outlier — a candidate for inspection or replacement. Marker "
-        f"shape differentiates robot type (R5 vs R5+ vs R5.1 Pro, etc.) for highlighted "
-        f"sites, since different battery/charger hardware charges at different rates."
+        f"front in full colour, broken down by exact literal robot type — same control "
+        f"used on every other CUBE Analytics chart. A robot that charges much longer "
+        f"than others covering similar distance is a battery-health outlier — a "
+        f"candidate for inspection or replacement."
     )
 
     with st.spinner(f"Loading per-robot battery data for all sites ({_BATTERY_SNAPSHOT_DAYS}-day snapshot)..."):
@@ -1901,14 +1903,27 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
     fig = go.Figure()
 
     if not background.empty:
-        fig.add_trace(go.Scatter(
-            x=background["distance_per_day_km"], y=background["charging_min_per_day"],
-            mode="markers", name=f"All other robots (n={len(background)})",
-            marker=dict(symbol="circle", size=6, color="#bbbbbb", opacity=0.5),
-            hovertemplate="Robot %{customdata[0]} — %{customdata[1]}<br>"
-                          "%{x:.1f} km/day, %{y:.0f} min/day<extra></extra>",
-            customdata=background[["robot_id", "site"]].assign(site=lambda d: d["site"].map(_short_site)),
-        ))
+        # Fixed (not order-dependent) colour+shape per battery class, so it's
+        # visually consistent every time regardless of which literal robot
+        # types happen to be present. Even with nothing highlighted, this
+        # answers "where do Pro robots sit vs Standard" at a glance.
+        _BG_STYLE = {
+            "Standard": dict(symbol="circle", color="#bbbbbb"),
+            "Pro": dict(symbol="diamond", color="#9467bd"),
+        }
+        for cls in ["Standard", "Pro"]:
+            sub = background[background["battery_class"] == cls]
+            if sub.empty:
+                continue
+            style = _BG_STYLE[cls]
+            fig.add_trace(go.Scatter(
+                x=sub["distance_per_day_km"], y=sub["charging_min_per_day"],
+                mode="markers", name=f"{cls} — other sites (n={len(sub)})",
+                marker=dict(symbol=style["symbol"], size=6, color=style["color"], opacity=0.5),
+                hovertemplate="Robot %{customdata[0]} — %{customdata[1]}<br>"
+                              "%{x:.1f} km/day, %{y:.0f} min/day<extra></extra>",
+                customdata=sub[["robot_id", "site"]].assign(site=lambda d: d["site"].map(_short_site)),
+            ))
 
     if not foreground.empty:
         for site in highlighted_sites:
