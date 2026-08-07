@@ -1812,19 +1812,36 @@ def _robot_battery_frame(inst_id, date_from_str, date_to_str):
     return g[["robot_id", "robot_type", "distance_per_day_km", "charging_min_per_day"]]
 
 
+_BATTERY_SNAPSHOT_DAYS = 14
+
+
 def _view_robot_batteries(date_from_str, date_to_str, aggregation):
     st.markdown("#### Robots — Batteries")
+
+    # This chart is a short rolling snapshot of current battery health, not a
+    # long-range trend - so it intentionally ignores the sidebar's date filter
+    # (shared across every other CUBE Analytics page) and always shows a fixed
+    # trailing window. "Yesterday" as the end date, not today, since today's
+    # data is usually still incomplete at whatever time this is viewed.
+    snap_to = date.today() - timedelta(days=1)
+    snap_from = snap_to - timedelta(days=_BATTERY_SNAPSHOT_DAYS - 1)
+    date_from_str = str(snap_from)
+    date_to_str = str(snap_to)
+
     st.caption(
-        "Charging time per day vs distance travelled per day, one dot per robot, across "
-        "the whole fleet (gray). Use **Highlight site(s)** in the left sidebar to bring one "
-        "or more sites to the front in colour — same control used on every other CUBE "
-        "Analytics chart. A robot that charges much longer than others covering similar "
-        "distance is a battery-health outlier — a candidate for inspection or replacement. "
-        "Marker shape differentiates robot type (R5 vs R5+ vs R5.1 Pro, etc.) for highlighted "
-        "sites, since different battery/charger hardware charges at different rates."
+        f"Charging time per day vs distance travelled per day, one dot per robot, across "
+        f"the whole fleet (gray). Fixed trailing **{_BATTERY_SNAPSHOT_DAYS} days** "
+        f"({snap_from:%Y-%m-%d} – {snap_to:%Y-%m-%d}), independent of the date filter in "
+        f"the sidebar (that's shared by every other chart on this page). Use "
+        f"**Highlight site(s)** in the left sidebar to bring one or more sites to the "
+        f"front in colour — same control used on every other CUBE Analytics chart. A "
+        f"robot that charges much longer than others covering similar distance is a "
+        f"battery-health outlier — a candidate for inspection or replacement. Marker "
+        f"shape differentiates robot type (R5 vs R5+ vs R5.1 Pro, etc.) for highlighted "
+        f"sites, since different battery/charger hardware charges at different rates."
     )
 
-    with st.spinner("Loading per-robot battery data for all sites..."):
+    with st.spinner(f"Loading per-robot battery data for all sites ({_BATTERY_SNAPSHOT_DAYS}-day snapshot)..."):
         all_df = _load_for_sites(_robot_battery_frame, date_from_str, date_to_str)
 
     if all_df.empty:
