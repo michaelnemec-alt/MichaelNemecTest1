@@ -2117,7 +2117,7 @@ def _view_robot_battery_trend(date_from_str, date_to_str, aggregation):
             x=g["month"], y=g["score_smoothed"], mode="lines",
             name=f"Robot {robot_id}" if is_flagged else "Rest of fleet",
             legendgroup="flagged" if is_flagged else "rest",
-            showlegend=is_flagged or robot_id == first_non_flagged_id,
+            showlegend=bool(is_flagged or robot_id == first_non_flagged_id),
             line=dict(width=2 if is_flagged else 1, color=None if is_flagged else "#c3c2b7"),
             hovertemplate=f"Robot {robot_id}: " + "%{y:.2f}<extra></extra>",
         ))
