@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -28,7 +29,7 @@ from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_system_mode_periods,
     query_robot_state, query_robot_state_per_robot, query_robot_charging_per_robot,
-    query_robot_movement, query_bin_presentations,
+    query_robot_movement, query_battery_estimation_per_robot, query_bin_presentations,
     query_port_wait_time_daily, query_port_uptime, query_port_uptime_per_port,
     query_incidents, query_robot_errors,
     query_recovery_times, query_installation_data, query_module_versions, query_bins_above,
@@ -353,6 +354,8 @@ def render(selected_view="Overview & Health"):
             _view_robot_detail(date_from_str, date_to_str, aggregation)
         elif selected_view == "Robot Batteries":
             _view_robot_batteries(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Robot Degradation Trend":
+            _view_robot_battery_trend(date_from_str, date_to_str, aggregation)
         elif selected_view == "Chargers":
             _view_module_chargers(date_from_str, date_to_str, aggregation)
         elif selected_view == "System":
@@ -1986,6 +1989,176 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
         file_name=f"robot_batteries_{site_label}_{date_from_str}_{date_to_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="dl_robot_batteries",
+    )
+
+
+_DEGRADATION_THRESHOLD_DEFAULT = 2.5  # between LOW=2 and MEDIUM_LOW=3 in CubeAnalytics' own text buckets
+
+
+def _monthly_battery_trend(inst_id, date_from_str, date_to_str):
+    """Per-robot monthly average capacity_estimation_score, 3-month rolling
+    smoothed, for one site. Standard robots only (see
+    query_battery_estimation_per_robot docstring - Pro robots are never
+    returned by this endpoint, no filtering needed here)."""
+    df = query_battery_estimation_per_robot(inst_id, date_from_str, date_to_str)
+    if df.empty:
+        return pd.DataFrame()
+    df["month"] = df["date"].dt.to_period("M").dt.to_timestamp()
+    monthly = df.groupby(["robot_id", "month"], as_index=False)["capacity_estimation_score"].mean()
+    monthly = monthly.sort_values(["robot_id", "month"])
+    monthly["score_smoothed"] = (
+        monthly.groupby("robot_id")["capacity_estimation_score"]
+        .transform(lambda s: s.rolling(3, min_periods=1).mean())
+    )
+    return monthly
+
+
+def _project_replace_by(robot_months):
+    """Linear fit of score_smoothed vs month index for one robot's monthly
+    series. Returns (slope_per_month, months_to_threshold or None,
+    confidence) - confidence is 'low' under 4 points, else 'ok'. months_to_
+    threshold is None if the trend is flat/improving (nothing to project)."""
+    n = len(robot_months)
+    if n < 2:
+        return 0.0, None, "low"
+    x = np.arange(n)
+    y = robot_months["score_smoothed"].to_numpy()
+    slope, intercept = np.polyfit(x, y, 1)
+    confidence = "low" if n < 4 else "ok"
+    if slope >= 0:
+        return slope, None, confidence
+    current = y[-1]
+    if current <= _DEGRADATION_THRESHOLD_DEFAULT:
+        return slope, 0, confidence
+    months_to_threshold = (current - _DEGRADATION_THRESHOLD_DEFAULT) / (-slope)
+    return slope, months_to_threshold, confidence
+
+
+def _view_robot_battery_trend(date_from_str, date_to_str, aggregation):
+    st.markdown("#### Robots — Degradation Trend")
+    st.caption(
+        "Monthly battery health score per robot (CubeAnalytics' own "
+        "capacity_estimation_score, 5 = healthy, 1 = failing), smoothed as a "
+        "3-month rolling average so one unusually quiet month doesn't read as "
+        "a fake spike. **Standard robots only** (R5/R5+/R5.1/R5.1+) — Pro "
+        "robots use different battery hardware with no equivalent official "
+        "score; a separate view is needed for those. Uses **Highlight "
+        "site(s)** and the date range from the sidebar, same as every other "
+        "chart on this page — pick at least one site below to load data."
+    )
+
+    highlighted_sites = list(st.session_state.get("cube_highlight", []))
+    if not highlighted_sites:
+        st.info(
+            "Pick one or more sites in the sidebar's **Highlight site(s)** to load this "
+            "chart. Deliberately scoped to selected sites, not the whole fleet at once — "
+            "a year of history across every site would be a heavy pull."
+        )
+        return
+
+    threshold = st.slider(
+        "Replace threshold (battery health score)", min_value=1.0, max_value=4.0,
+        value=_DEGRADATION_THRESHOLD_DEFAULT, step=0.1, key="battery_trend_threshold",
+        help="CubeAnalytics buckets: 1=VERY_LOW, 2=LOW, 3=MEDIUM_LOW, 4=MEDIUM_HIGH, "
+             "5=HIGH. Default sits between LOW and MEDIUM_LOW. Adjust once you've seen "
+             "real data below — this isn't a value derived from your fleet, just a "
+             "starting point based on CubeAnalytics' own category boundaries.",
+    )
+
+    with st.spinner(f"Loading monthly battery trend for {len(highlighted_sites)} site(s)..."):
+        frames = []
+        for site in highlighted_sites:
+            installations = get_installations()
+            inst_id = next((i["id"] for i in installations if i["name"] == site), None)
+            if not inst_id:
+                continue
+            monthly = _monthly_battery_trend(inst_id, date_from_str, date_to_str)
+            if not monthly.empty:
+                monthly["site"] = site
+                frames.append(monthly)
+        monthly_df = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    if monthly_df.empty:
+        st.warning("No battery-estimation data for the selected site(s)/period.")
+        return
+
+    n_months = monthly_df["month"].nunique()
+    if n_months < 2:
+        st.info(
+            f"Only {n_months} month of data in the selected date range — widen the "
+            f"sidebar's date range to see a trend (this chart needs several months to "
+            f"be meaningful; a single month is just a snapshot, use the Batteries tab "
+            f"for that)."
+        )
+
+    rows = []
+    for robot_id, g in monthly_df.groupby("robot_id"):
+        g = g.sort_values("month")
+        slope, months_to_threshold, confidence = _project_replace_by(g)
+        current_score = g["score_smoothed"].iloc[-1]
+        rows.append({
+            "robot_id": robot_id, "site": g["site"].iloc[-1],
+            "current_score": current_score, "slope_per_month": slope,
+            "months_to_threshold": months_to_threshold, "confidence": confidence,
+            "already_over": current_score <= threshold,
+        })
+    status_df = pd.DataFrame(rows)
+    flagged_ids = set(status_df.loc[
+        status_df["already_over"] | status_df["months_to_threshold"].notna(), "robot_id"
+    ])
+
+    fig = go.Figure()
+    non_flagged_ids = monthly_df.loc[~monthly_df["robot_id"].isin(flagged_ids), "robot_id"]
+    first_non_flagged_id = non_flagged_ids.iloc[0] if len(non_flagged_ids) else None
+    for robot_id, g in monthly_df.groupby("robot_id"):
+        g = g.sort_values("month")
+        is_flagged = robot_id in flagged_ids
+        fig.add_trace(go.Scatter(
+            x=g["month"], y=g["score_smoothed"], mode="lines",
+            name=f"Robot {robot_id}" if is_flagged else "Rest of fleet",
+            legendgroup="flagged" if is_flagged else "rest",
+            showlegend=is_flagged or robot_id == first_non_flagged_id,
+            line=dict(width=2 if is_flagged else 1, color=None if is_flagged else "#c3c2b7"),
+            hovertemplate=f"Robot {robot_id}: " + "%{y:.2f}<extra></extra>",
+        ))
+    fig.add_hline(
+        y=threshold, line_dash="dash", line_color="#52514e", line_width=2,
+        annotation_text="Replace threshold", annotation_position="top left",
+    )
+    fig.update_layout(
+        height=480, margin=dict(l=10, r=10, t=10, b=10), plot_bgcolor="white",
+        yaxis_title="Battery health score", yaxis=dict(range=[1, 5]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    )
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(showgrid=True, gridcolor="#eee")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+    tbl = status_df.copy()
+    tbl["Projected replace-by"] = tbl.apply(
+        lambda r: "Already over threshold" if r["already_over"]
+        else (f"~{r['months_to_threshold']:.1f} months" if pd.notna(r["months_to_threshold"])
+              else "Stable / improving"),
+        axis=1,
+    )
+    tbl["Confidence"] = tbl["confidence"].map({"low": "Low (few data points)", "ok": "OK"})
+    tbl = tbl.rename(columns={
+        "robot_id": "Robot", "site": "Site", "current_score": "Current score",
+        "slope_per_month": "Trend (Δ/month)",
+    })[["Robot", "Site", "Current score", "Trend (Δ/month)", "Projected replace-by", "Confidence"]]
+    tbl["Current score"] = tbl["Current score"].round(2)
+    tbl["Trend (Δ/month)"] = tbl["Trend (Δ/month)"].round(3)
+    st.dataframe(tbl.sort_values("Current score"), use_container_width=True, hide_index=True)
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        tbl.to_excel(writer, index=False, sheet_name="Degradation trend")
+    st.download_button(
+        "Download degradation trend (XLSX)", data=buf.getvalue(),
+        file_name=f"battery_degradation_{'_'.join(_short_site(s) for s in highlighted_sites)}_{date_from_str}_{date_to_str}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dl_battery_trend",
     )
 
 

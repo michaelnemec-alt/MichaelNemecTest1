@@ -552,6 +552,47 @@ def query_robot_charging_per_robot(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
+def query_battery_estimation_per_robot(installation_id, date_from_str, date_to_str):
+    """Per (date, robot) battery capacity estimation for one installation.
+
+    From /r5-battery-estimation/ — CubeAnalytics' own calibrated battery
+    health score (1-5, higher is healthier) and the underlying charge_amp_ratio,
+    for STANDARD robots only (R5/R5+/R5.1/R5.1+). Pro-type robots (R5.1 Pro,
+    etc.) are never returned by this endpoint - confirmed by cross-checking
+    robot_id ranges against /r5-1-battery/, which uses a disjoint ID space for
+    the same installation. A future Pro-robot degradation view needs a
+    different endpoint (/r5-1-battery/) and a different derived metric, since
+    that endpoint has no equivalent pre-built score.
+
+    Deliberately lean (robot_id, score, ratio only - no robot_type, since
+    every row here is already Standard by construction) for a chart meant to
+    span many months: at ~2-3 MB per site per ~100 days observed, this is
+    roughly 30-40x smaller than the equivalent /robot-state/ pull, which is
+    why this endpoint (not /robot-state/) drives the degradation-trend chart.
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/r5-battery-estimation/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_days(url, params)
+
+    rows = []
+    for day_result in results:
+        d = day_result.get("date")
+        for r in day_result.get("result", {}).get("robots", []):
+            rows.append({
+                "date": d,
+                "robot_id": r.get("robot_id"),
+                "capacity_estimation_score": r.get("capacity_estimation_score"),
+                "charge_amp_ratio": r.get("charge_amp_ratio"),
+            })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
 def query_robot_state_per_robot(installation_id, date_from_str, date_to_str):
     """Per (date, robot) uptime metrics for a single installation.
 

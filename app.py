@@ -66,7 +66,7 @@ REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Pe
 SYSTEM_KPI_VIEWS = ["Availability KPI", "System *", "Ports *", "Robots *", "Chargers", "AutoStore system *", "Error & Health Metrics"]
 SYSTEM_VIEWS = ["Overview", "System mode periods"]
 PORTS_VIEWS = ["Overview", "Detailed Overview"]
-ROBOTS_VIEWS = ["Overview", "Detailed Overview", "Batteries"]
+ROBOTS_VIEWS = ["Overview", "Detailed Overview", "Batteries", "Degradation Trend"]
 FACILITY_VIEWS = ["Time to Recover", "Reliability", "Incidents"]
 AUTOSTORE_VIEWS = ["Versions of Systems", "Versions of Modules", "Bin overview"]
 
@@ -249,8 +249,10 @@ elif selected == "System OEE *":
                 view = "Robots"
             elif rv == "Detailed Overview":
                 view = "Robot Detailed Overview"
-            else:
+            elif rv == "Batteries":
                 view = "Robot Batteries"
+            else:
+                view = "Robot Degradation Trend"
             logger.info("Rendering Robots sub-view: %s", view)
             render(view)
         else:
