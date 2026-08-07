@@ -10,6 +10,7 @@ from datetime import date, timedelta
 
 import altair as alt
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from cubeanalytics_utils import (
@@ -68,6 +69,30 @@ def _line_chart(df, cols, decimals=1):
 
 def _bar_chart(series):
     st.bar_chart(series.round(0))
+
+
+def _robot_battery_lines_chart(df, robot_cols):
+    """Battery % per robot, one thin line per robot. Plotly + WebGL (Scattergl)
+    instead of native st.line_chart: handles 100+ series/day without lagging,
+    and gives click-to-hide / double-click-to-isolate on the legend for free
+    (native charts can't do that)."""
+    x = df["ts"]
+    fig = go.Figure()
+    for col in robot_cols:
+        fig.add_trace(go.Scattergl(
+            x=x, y=df[col].round(1), mode="lines", name=col,
+            line=dict(width=1),
+            hovertemplate=f"{col}: " + "%{y:.1f}%<extra></extra>",
+        ))
+    fig.update_layout(
+        height=420, margin=dict(l=10, r=10, t=10, b=10),
+        plot_bgcolor="white",
+        legend=dict(orientation="h", yanchor="top", y=-0.15, font=dict(size=9)),
+        yaxis_title="Battery %",
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#eee")
+    fig.update_yaxes(showgrid=True, gridcolor="#eee", range=[0, 100])
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def _robot_state_bar(df, stack):
@@ -217,7 +242,8 @@ def _render_robots(inst_id, label):
         if robot_cols:
             with st.container(border=True):
                 st.markdown(f"**Battery per robot ({len(robot_cols)} robots)**")
-                _line_chart(bd, robot_cols)
+                st.caption("Click a robot in the legend to hide it, double-click to isolate it.")
+                _robot_battery_lines_chart(bd, robot_cols)
     show = ["ts", "robots", "battery_avg", *[c for c in _ROBOT_SERIES if c in d.columns]]
     with st.expander("Data table + CSV"):
         st.dataframe(d[show], use_container_width=True, hide_index=True)
