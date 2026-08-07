@@ -27,7 +27,7 @@ _FETCH_SEMAPHORE = threading.BoundedSemaphore(_MAX_CONCURRENT_FETCHES)
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_system_mode_periods,
-    query_robot_state, query_robot_state_per_robot, query_bin_presentations,
+    query_robot_state, query_robot_state_per_robot, query_robot_movement, query_bin_presentations,
     query_port_wait_time_daily, query_port_uptime, query_port_uptime_per_port,
     query_incidents, query_robot_errors,
     query_recovery_times, query_installation_data, query_module_versions, query_bins_above,
@@ -350,6 +350,8 @@ def render(selected_view="Overview & Health"):
             _view_port_detail(date_from_str, date_to_str, aggregation)
         elif selected_view == "Robot Detailed Overview":
             _view_robot_detail(date_from_str, date_to_str, aggregation)
+        elif selected_view == "Robot Batteries":
+            _view_robot_batteries(date_from_str, date_to_str, aggregation)
         elif selected_view == "Chargers":
             _view_module_chargers(date_from_str, date_to_str, aggregation)
         elif selected_view == "System":
@@ -1773,6 +1775,173 @@ def _view_robot_detail(date_from_str, date_to_str, aggregation):
         file_name=f"robot_detail_{_short_site(selected_site)}_{date_from_str}_{date_to_str}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="dl_robot_detail",
+    )
+
+
+_BATTERY_TYPE_SYMBOLS = {
+    # Assigned in the order types are first seen if not listed here.
+}
+_SYMBOL_CYCLE = ["circle", "diamond", "square", "triangle-up", "cross", "x"]
+
+
+def _robot_battery_frame(inst_id, date_from_str, date_to_str):
+    """Per-robot avg distance/day (km) and avg charging time/day (min) for one site."""
+    df_move = query_robot_movement(inst_id, date_from_str, date_to_str)
+    df_state = query_robot_state_per_robot(inst_id, date_from_str, date_to_str)
+    if df_move.empty or df_state.empty:
+        return pd.DataFrame()
+
+    move_g = df_move.groupby("robot_id", as_index=False).agg(
+        distance_km_total=("distance_km", "sum"),
+        days_moved=("date", "nunique"),
+    )
+    state_g = df_state.groupby("robot_id", as_index=False).agg(
+        robot_type=("robot_type", "last"),
+        charging_s_total=("charging_available", "sum"),
+        charging_unavail_s_total=("charging_unavailable", "sum"),
+        days_state=("date", "nunique"),
+    )
+    state_g["charging_s_total"] = state_g["charging_s_total"] + state_g["charging_unavail_s_total"]
+
+    g = move_g.merge(state_g, on="robot_id", how="inner")
+    if g.empty:
+        return g
+    n_days = g[["days_moved", "days_state"]].max(axis=1).clip(lower=1)
+    g["distance_per_day_km"] = g["distance_km_total"] / n_days
+    g["charging_min_per_day"] = (g["charging_s_total"] / 60.0) / n_days
+    return g[["robot_id", "robot_type", "distance_per_day_km", "charging_min_per_day"]]
+
+
+def _view_robot_batteries(date_from_str, date_to_str, aggregation):
+    st.markdown("#### Robots — Batteries")
+    st.caption(
+        "Charging time per day vs distance travelled per day, one dot per robot. "
+        "A robot that charges much longer than others covering similar distance is "
+        "a battery-health outlier — a candidate for inspection or replacement. "
+        "Marker shape differentiates robot type (R5 vs R5+ vs R5.1 Pro, etc.), "
+        "since different battery/charger hardware charges at different rates."
+    )
+
+    try:
+        installations = get_installations()
+    except Exception as e:
+        st.error(f"Failed to fetch installations: {e}")
+        return
+    site_names = sorted(inst["name"] for inst in installations)
+    if not site_names:
+        st.warning("No sites available.")
+        return
+    name_to_id = {inst["name"]: inst["id"] for inst in installations}
+
+    col1, col2 = st.columns(2)
+    with col1:
+        primary_site = st.selectbox(
+            "Site", site_names, index=0, key="battery_primary_site",
+            format_func=_short_site,
+        )
+    with col2:
+        compare_options = ["(none)"] + [s for s in site_names if s != primary_site]
+        compare_site = st.selectbox(
+            "Compare against (optional)", compare_options, index=0, key="battery_compare_site",
+            format_func=lambda s: s if s == "(none)" else _short_site(s),
+        )
+
+    highlight_raw = st.text_input(
+        "Highlight robot ID(s) (comma-separated, e.g. a lithium retrofit unit)",
+        value="", key="battery_highlight_ids",
+        help="These robots are plotted with a distinct star marker, on top of their "
+             "normal type colour, so you can track a specific retrofit or repaired robot.",
+    )
+    highlight_ids = set()
+    for tok in highlight_raw.split(","):
+        tok = tok.strip()
+        if tok.isdigit():
+            highlight_ids.add(int(tok))
+
+    with st.spinner("Loading per-robot battery data..."):
+        inst_id = name_to_id[primary_site]
+        g_primary = _robot_battery_frame(inst_id, date_from_str, date_to_str)
+        g_compare = pd.DataFrame()
+        if compare_site != "(none)":
+            g_compare = _robot_battery_frame(name_to_id[compare_site], date_from_str, date_to_str)
+
+    if g_primary.empty:
+        st.warning("No matching robot-movement / robot-state data for this site and period.")
+        return
+
+    fig = go.Figure()
+
+    def _add_site_traces(g, site_label, opacity, symbol_offset=0):
+        types = sorted(t for t in g["robot_type"].dropna().unique() if t)
+        for i, rtype in enumerate(types):
+            sub = g[(g["robot_type"] == rtype) & (~g["robot_id"].isin(highlight_ids))]
+            if sub.empty:
+                continue
+            symbol = _SYMBOL_CYCLE[(i + symbol_offset) % len(_SYMBOL_CYCLE)]
+            fig.add_trace(go.Scatter(
+                x=sub["distance_per_day_km"], y=sub["charging_min_per_day"],
+                mode="markers", name=f"{rtype} — {_short_site(site_label)} (n={len(sub)})",
+                marker=dict(symbol=symbol, size=9, opacity=opacity),
+                hovertemplate="Robot %{customdata}<br>%{x:.1f} km/day, %{y:.0f} min/day<extra></extra>",
+                customdata=sub["robot_id"],
+            ))
+        avg_x, avg_y = g["distance_per_day_km"].mean(), g["charging_min_per_day"].mean()
+        fig.add_trace(go.Scatter(
+            x=[avg_x], y=[avg_y], mode="markers",
+            name=f"{_short_site(site_label)} fleet avg",
+            marker=dict(symbol="x", size=16, color="#333333", line=dict(width=3)),
+            hovertemplate=f"{_short_site(site_label)} fleet avg<br>%{{x:.1f}} km/day, %{{y:.0f}} min/day<extra></extra>",
+        ))
+
+    _add_site_traces(g_primary, primary_site, opacity=0.85, symbol_offset=0)
+    if not g_compare.empty:
+        _add_site_traces(g_compare, compare_site, opacity=0.35, symbol_offset=2)
+
+    if highlight_ids:
+        hi = g_primary[g_primary["robot_id"].isin(highlight_ids)]
+        if not hi.empty:
+            fig.add_trace(go.Scatter(
+                x=hi["distance_per_day_km"], y=hi["charging_min_per_day"],
+                mode="markers+text", name="Highlighted robot(s)",
+                marker=dict(symbol="star", size=18, color="#e8873a", line=dict(width=1, color="#333")),
+                text=[f"Robot {r}" for r in hi["robot_id"]], textposition="top center",
+                hovertemplate="Robot %{customdata} (highlighted)<br>%{x:.1f} km/day, %{y:.0f} min/day<extra></extra>",
+                customdata=hi["robot_id"],
+            ))
+
+    fig.update_layout(
+        xaxis_title="Distance travelled per day (km)",
+        yaxis_title="Time charging per day (min)",
+        height=560, margin=dict(l=10, r=10, t=10, b=10),
+        plot_bgcolor="white", legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="#eee")
+    fig.update_yaxes(showgrid=True, gridcolor="#eee")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+    tbl = g_primary.copy()
+    if not g_compare.empty:
+        tbl["site"] = _short_site(primary_site)
+        cmp_tbl = g_compare.copy()
+        cmp_tbl["site"] = _short_site(compare_site)
+        tbl = pd.concat([tbl, cmp_tbl], ignore_index=True)
+    tbl = tbl.rename(columns={
+        "robot_id": "Robot", "robot_type": "Type",
+        "distance_per_day_km": "Distance (km/day)", "charging_min_per_day": "Charging (min/day)",
+    })
+    tbl["Distance (km/day)"] = tbl["Distance (km/day)"].round(1)
+    tbl["Charging (min/day)"] = tbl["Charging (min/day)"].round(0)
+    st.dataframe(tbl.sort_values("Charging (min/day)", ascending=False), use_container_width=True, hide_index=True)
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        tbl.to_excel(writer, index=False, sheet_name="Battery data")
+    st.download_button(
+        "Download battery data (XLSX)", data=buf.getvalue(),
+        file_name=f"robot_batteries_{_short_site(primary_site)}_{date_from_str}_{date_to_str}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key="dl_robot_batteries",
     )
 
 

@@ -66,7 +66,7 @@ REPORTING_VIEWS = ["Prio vs Picking", "UNIFY Pivot Ready", "Day Evaluation", "Pe
 SYSTEM_KPI_VIEWS = ["Availability KPI", "System *", "Ports *", "Robots *", "Chargers", "AutoStore system *", "Error & Health Metrics"]
 SYSTEM_VIEWS = ["Overview", "System mode periods"]
 PORTS_VIEWS = ["Overview", "Detailed Overview"]
-ROBOTS_VIEWS = ["Overview", "Detailed Overview"]
+ROBOTS_VIEWS = ["Overview", "Detailed Overview", "Batteries"]
 FACILITY_VIEWS = ["Time to Recover", "Reliability", "Incidents"]
 AUTOSTORE_VIEWS = ["Versions of Systems", "Versions of Modules", "Bin overview"]
 
@@ -244,7 +244,13 @@ elif selected == "System OEE *":
             render(view)
         elif system_view == "Robots *":
             from views.cube_analytics import render
-            view = "Robots" if (robots_view or "Overview") == "Overview" else "Robot Detailed Overview"
+            rv = robots_view or "Overview"
+            if rv == "Overview":
+                view = "Robots"
+            elif rv == "Detailed Overview":
+                view = "Robot Detailed Overview"
+            else:
+                view = "Robot Batteries"
             logger.info("Rendering Robots sub-view: %s", view)
             render(view)
         else:

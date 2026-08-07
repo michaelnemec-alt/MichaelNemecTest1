@@ -555,6 +555,47 @@ def query_robot_state_per_robot(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
+def query_robot_movement(installation_id, date_from_str, date_to_str):
+    """Per (date, robot) physical movement for a single installation.
+
+    Distance (x+y+z, converted to km) and lift count per robot per day, from
+    the /robot-movement endpoint. The endpoint currently returns two API
+    versions per day (2.0.0 current, 1.3.0 deprecated) for the same data;
+    only 2.0.0 is kept to avoid double-counting.
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/robot-movement/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_days(url, params)
+
+    rows = []
+    for day_result in results:
+        if day_result.get("version") != "2.0.0":
+            continue
+        d = day_result.get("date")
+        movements = day_result.get("result", {}).get("robot_movements", {})
+        if not isinstance(movements, dict):
+            continue
+        for robot_id, m in movements.items():
+            dist_m = (m.get("distance_x_m", 0) or 0) + (m.get("distance_y_m", 0) or 0) + (m.get("distance_z_m", 0) or 0)
+            try:
+                rid = int(robot_id)
+            except (TypeError, ValueError):
+                rid = robot_id
+            rows.append({
+                "date": d,
+                "robot_id": rid,
+                "distance_km": dist_m / 1000.0,
+                "total_lifts": m.get("total_lifts", 0) or 0,
+            })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
 def query_robot_state_hourly(installation_id, date_from_str, date_to_str):
     """Per (date, hour) robot working vs total time for one installation.
 
