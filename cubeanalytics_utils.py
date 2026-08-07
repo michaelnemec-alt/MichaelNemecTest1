@@ -271,6 +271,86 @@ def clear_day_cache(day=None):
     return removed
 
 
+# --- Per-month on-disk aggregate cache --------------------------------------
+# For metrics that need many months of daily data (e.g. a distance-vs-charging
+# ratio trend), holding every day's raw rows in memory for the whole requested
+# range at once is what caused a real OOM on this app. This cache goes one
+# level further than the day cache above: instead of caching raw daily JSON,
+# it caches the small ALREADY-AGGREGATED per-robot-per-month result. A closed
+# (fully-past) calendar month is computed once, cached here, and then never
+# re-fetched or re-aggregated again - not even across a fresh Streamlit
+# process or a different (overlapping) date range. Only the current,
+# still-accumulating month is recomputed on each call. Callers are expected to
+# process one month at a time and discard the raw daily frames before moving
+# to the next, so peak memory stays bounded to a single month regardless of
+# how many months are requested overall.
+_MONTH_CACHE_DIR = Path(
+    os.environ.get("CUBE_MONTH_CACHE_DIR", str(Path.home() / ".streamlit" / "cube_month_cache"))
+)
+
+
+def _month_cache_path(installation_id, metric_name, year_month):
+    return _MONTH_CACHE_DIR / str(installation_id) / metric_name / f"{year_month}.json"
+
+
+def _read_month_agg(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _write_month_agg(path, records):
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(records, f)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def clear_month_cache(installation_id=None):
+    """Delete per-month aggregate cache files. Mirrors clear_day_cache - the
+    Recalculate button should call this too if it wants to force a genuinely
+    fresh recomputation of any month-based metric."""
+    if not _MONTH_CACHE_DIR.exists():
+        return 0
+    removed = 0
+    root = _MONTH_CACHE_DIR / str(installation_id) if installation_id else _MONTH_CACHE_DIR
+    if not root.exists():
+        return 0
+    for path in root.rglob("*.json"):
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+def _iter_months(date_from_str, date_to_str):
+    """Calendar month starts (as date objects, always day=1) overlapping the
+    given range."""
+    d0 = datetime.strptime(date_from_str, "%Y-%m-%d").date().replace(day=1)
+    d1 = datetime.strptime(date_to_str, "%Y-%m-%d").date()
+    months = []
+    cur = d0
+    while cur <= d1:
+        months.append(cur)
+        cur = (cur.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return months
+
+
+def _month_bounds(month_start, overall_from, overall_to):
+    """Clip one calendar month to the overall requested [from, to] range."""
+    next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    month_end = next_month - timedelta(days=1)
+    return max(month_start, overall_from), min(month_end, overall_to)
+
+
 def _day_of(obj):
     d = obj.get("date")
     if not d:
@@ -590,6 +670,69 @@ def query_battery_estimation_per_robot(installation_id, date_from_str, date_to_s
     df = pd.DataFrame(rows)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
+
+
+def query_movement_charging_monthly(installation_id, date_from_str, date_to_str):
+    """Per (robot, month) total distance (km) and total charging time (min)
+    for one installation - the distance-vs-charging ratio metric.
+
+    This is the original metric requested for the degradation-trend chart
+    (charging time per km driven), built on /robot-movement/ + /robot-state/.
+    /robot-state/ is the expensive endpoint (~90MB for ~100 days at one site
+    in testing, extrapolating to ~360MB/site for a full year) - the OOM that
+    crashed this app came from a related pull. This function is deliberately
+    NOT a single big date-range fetch: it processes and aggregates ONE
+    CALENDAR MONTH AT A TIME, via query_robot_movement + the lean
+    query_robot_charging_per_robot, discarding each month's raw daily rows
+    before moving to the next - so peak memory stays bounded to roughly one
+    month's data no matter how many months are requested overall.
+
+    On top of that, closed (fully-past) months are cached as their tiny
+    aggregated result (see _MONTH_CACHE_DIR / clear_month_cache) - once a
+    month is computed, it is never re-fetched or re-aggregated again, even
+    across a fresh process or a different but overlapping date range. Only
+    the current, still-accumulating month is recomputed on every call.
+    """
+    d0 = datetime.strptime(date_from_str, "%Y-%m-%d").date()
+    d1 = datetime.strptime(date_to_str, "%Y-%m-%d").date()
+    today = datetime.now(timezone.utc).date()
+    current_month_start = today.replace(day=1)
+
+    frames = []
+    for month_start in _iter_months(date_from_str, date_to_str):
+        year_month = month_start.strftime("%Y-%m")
+        is_closed = month_start < current_month_start
+        cache_path = _month_cache_path(installation_id, "movement_charging", year_month)
+
+        cached = _read_month_agg(cache_path) if is_closed else None
+        if cached is not None:
+            if cached:
+                frames.append(pd.DataFrame(cached))
+            continue
+
+        start, end = _month_bounds(month_start, d0, d1)
+        df_move = query_robot_movement(installation_id, str(start), str(end))
+        df_charge = query_robot_charging_per_robot(installation_id, str(start), str(end))
+
+        move_g = (df_move.groupby("robot_id", as_index=False)["distance_km"].sum()
+                  if not df_move.empty else pd.DataFrame(columns=["robot_id", "distance_km"]))
+        charge_g = (df_charge.groupby("robot_id", as_index=False)["charging_s"].sum()
+                    if not df_charge.empty else pd.DataFrame(columns=["robot_id", "charging_s"]))
+        merged = move_g.merge(charge_g, on="robot_id", how="outer").fillna(0)
+        merged["month"] = year_month
+        records = merged.to_dict("records")
+
+        if is_closed:
+            _write_month_agg(cache_path, records)
+        if records:
+            frames.append(pd.DataFrame(records))
+        del df_move, df_charge, merged  # explicit: don't hold this month's raw/merged frames past the loop
+
+    if not frames:
+        return pd.DataFrame()
+    result = pd.concat(frames, ignore_index=True)
+    result["month"] = pd.to_datetime(result["month"])
+    return result
 
 
 @st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
