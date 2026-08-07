@@ -1816,11 +1816,12 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
     st.markdown("#### Robots — Batteries")
     st.caption(
         "Charging time per day vs distance travelled per day, one dot per robot, across "
-        "the whole fleet (gray). Pick a site to highlight its robots on top. A robot that "
-        "charges much longer than others covering similar distance is a battery-health "
-        "outlier — a candidate for inspection or replacement. Marker shape/colour "
-        "differentiates robot type (R5 vs R5+ vs R5.1 Pro, etc.) for the highlighted site, "
-        "since different battery/charger hardware charges at different rates."
+        "the whole fleet (gray). Use **Highlight site(s)** in the left sidebar to bring one "
+        "or more sites to the front in colour — same control used on every other CUBE "
+        "Analytics chart. A robot that charges much longer than others covering similar "
+        "distance is a battery-health outlier — a candidate for inspection or replacement. "
+        "Marker shape differentiates robot type (R5 vs R5+ vs R5.1 Pro, etc.) for highlighted "
+        "sites, since different battery/charger hardware charges at different rates."
     )
 
     with st.spinner("Loading per-robot battery data for all sites..."):
@@ -1830,37 +1831,27 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
         st.warning("No matching robot-movement / robot-state data for this period.")
         return
 
-    site_names = sorted(all_df["site"].dropna().unique())
     all_types = sorted(t for t in all_df["robot_type"].dropna().unique() if t)
+    highlighted_sites = [s for s in st.session_state.get("cube_highlight", []) if s in set(all_df["site"])]
+    has_highlight = bool(highlighted_sites)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        site_options = ["(none — show all sites in gray)"] + site_names
-        selected_site = st.selectbox(
-            "Site (highlight)", site_options, index=0, key="battery_site",
-            format_func=lambda s: s if s.startswith("(none") else _short_site(s),
-        )
-    with col2:
-        type_options = ["All types"] + all_types
-        selected_type = st.selectbox(
-            "Robot type", type_options, index=0, key="battery_robot_type",
-            help="Scanned live from the data returned above — narrows both the gray "
-                 "background and the highlighted site to just this robot type, so you're "
-                 "not comparing different battery/charger hardware against each other.",
-        )
-
-    has_site = not selected_site.startswith("(none")
+    selected_type = st.selectbox(
+        "Robot type", ["All types"] + all_types, index=0, key="battery_robot_type",
+        help="Scanned live from the data above — narrows both the gray background and "
+             "the highlighted site(s) to just this robot type, so you're not comparing "
+             "different battery/charger hardware against each other.",
+    )
 
     highlight_raw = st.text_input(
         "Highlight robot ID(s) (comma-separated, e.g. a lithium retrofit unit)",
         value="", key="battery_highlight_ids",
         help="Plotted with a distinct star marker on top of their normal type colour. "
-             "Only applied within the selected site above (robot IDs repeat across sites), "
-             "so pick a site first if you want to highlight a specific unit.",
-        disabled=not has_site,
+             "Only applied within the sidebar's highlighted site(s) — robot IDs repeat "
+             "across sites, so pick a site there first if you want to track a specific unit.",
+        disabled=not has_highlight,
     )
     highlight_ids = set()
-    if has_site:
+    if has_highlight:
         for tok in highlight_raw.split(","):
             tok = tok.strip()
             if tok.isdigit():
@@ -1871,8 +1862,8 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
         st.warning("No robots of that type in the selected period.")
         return
 
-    background = df[df["site"] != selected_site] if has_site else df
-    foreground = df[df["site"] == selected_site] if has_site else pd.DataFrame()
+    background = df[~df["site"].isin(highlighted_sites)] if has_highlight else df
+    foreground = df[df["site"].isin(highlighted_sites)] if has_highlight else pd.DataFrame()
 
     fig = go.Figure()
 
@@ -1887,19 +1878,23 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
         ))
 
     if not foreground.empty:
-        types_here = sorted(t for t in foreground["robot_type"].dropna().unique() if t)
-        for i, rtype in enumerate(types_here):
-            sub = foreground[(foreground["robot_type"] == rtype) & (~foreground["robot_id"].isin(highlight_ids))]
-            if sub.empty:
+        for site in highlighted_sites:
+            site_df = foreground[foreground["site"] == site]
+            if site_df.empty:
                 continue
-            symbol = _SYMBOL_CYCLE[i % len(_SYMBOL_CYCLE)]
-            fig.add_trace(go.Scatter(
-                x=sub["distance_per_day_km"], y=sub["charging_min_per_day"],
-                mode="markers", name=f"{rtype} — {_short_site(selected_site)} (n={len(sub)})",
-                marker=dict(symbol=symbol, size=9),
-                hovertemplate="Robot %{customdata}<br>%{x:.1f} km/day, %{y:.0f} min/day<extra></extra>",
-                customdata=sub["robot_id"],
-            ))
+            types_here = sorted(t for t in site_df["robot_type"].dropna().unique() if t)
+            for i, rtype in enumerate(types_here):
+                sub = site_df[(site_df["robot_type"] == rtype) & (~site_df["robot_id"].isin(highlight_ids))]
+                if sub.empty:
+                    continue
+                symbol = _SYMBOL_CYCLE[i % len(_SYMBOL_CYCLE)]
+                fig.add_trace(go.Scatter(
+                    x=sub["distance_per_day_km"], y=sub["charging_min_per_day"],
+                    mode="markers", name=f"{rtype} — {_short_site(site)} (n={len(sub)})",
+                    marker=dict(symbol=symbol, size=9),
+                    hovertemplate="Robot %{customdata}<br>%{x:.1f} km/day, %{y:.0f} min/day<extra></extra>",
+                    customdata=sub["robot_id"],
+                ))
 
         if highlight_ids:
             hi = foreground[foreground["robot_id"].isin(highlight_ids)]
@@ -1924,7 +1919,7 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
     st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
-    tbl = (foreground if has_site else df).copy()
+    tbl = (foreground if has_highlight else df).copy()
     tbl["site"] = tbl["site"].map(_short_site)
     tbl = tbl.rename(columns={
         "robot_id": "Robot", "robot_type": "Type", "site": "Site",
@@ -1934,7 +1929,7 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
     tbl["Charging (min/day)"] = tbl["Charging (min/day)"].round(0)
     st.dataframe(tbl.sort_values("Charging (min/day)", ascending=False), use_container_width=True, hide_index=True)
 
-    site_label = _short_site(selected_site) if has_site else "all_sites"
+    site_label = "_".join(_short_site(s) for s in highlighted_sites) if has_highlight else "all_sites"
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         tbl.to_excel(writer, index=False, sheet_name="Battery data")
