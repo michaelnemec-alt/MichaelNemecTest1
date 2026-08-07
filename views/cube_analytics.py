@@ -1831,15 +1831,27 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
         st.warning("No matching robot-movement / robot-state data for this period.")
         return
 
-    all_types = sorted(t for t in all_df["robot_type"].dropna().unique() if t)
+    all_df["battery_class"] = all_df["robot_type"].map(
+        lambda t: "Pro" if "pro" in str(t).lower() else "Standard"
+    )
+    standard_types = sorted(t for t in all_df.loc[all_df["battery_class"] == "Standard", "robot_type"].dropna().unique())
+    pro_types = sorted(t for t in all_df.loc[all_df["battery_class"] == "Pro", "robot_type"].dropna().unique())
+
     highlighted_sites = [s for s in st.session_state.get("cube_highlight", []) if s in set(all_df["site"])]
     has_highlight = bool(highlighted_sites)
 
+    type_options = ["All types"]
+    if standard_types:
+        type_options.append(f"Standard ({', '.join(standard_types)})")
+    if pro_types:
+        type_options.append(f"Pro ({', '.join(pro_types)})")
     selected_type = st.selectbox(
-        "Robot type", ["All types"] + all_types, index=0, key="battery_robot_type",
-        help="Scanned live from the data above — narrows both the gray background and "
-             "the highlighted site(s) to just this robot type, so you're not comparing "
-             "different battery/charger hardware against each other.",
+        "Robot type", type_options, index=0, key="battery_robot_type",
+        help="R5 / R5+ / R5.1 / R5.1+ share the same battery/charger hardware — grouped "
+             "as 'Standard'. Anything with 'Pro' in the name (R5 Pro, R5.1 Pro, etc.) is a "
+             "different battery/charger, grouped separately. Choosing one keeps the chart "
+             "apples-to-apples; marker shape still tells the exact literal type apart "
+             "within whichever group you pick.",
     )
 
     highlight_raw = st.text_input(
@@ -1857,7 +1869,12 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
             if tok.isdigit():
                 highlight_ids.add(int(tok))
 
-    df = all_df if selected_type == "All types" else all_df[all_df["robot_type"] == selected_type]
+    if selected_type == "All types":
+        df = all_df
+    elif selected_type.startswith("Standard"):
+        df = all_df[all_df["battery_class"] == "Standard"]
+    else:
+        df = all_df[all_df["battery_class"] == "Pro"]
     if df.empty:
         st.warning("No robots of that type in the selected period.")
         return
