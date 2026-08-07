@@ -507,6 +507,51 @@ def query_robot_state(installation_id, date_from_str, date_to_str):
 
 
 @st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
+def query_robot_charging_per_robot(installation_id, date_from_str, date_to_str):
+    """Per (date, robot) charging time only — a lean sibling of
+    query_robot_state_per_robot for callers that just need robot_type +
+    total charging seconds (e.g. the battery-health scatter/trend charts).
+
+    Parses the exact same cached /robot-state/ payload (no extra API cost),
+    but discards working/available/recovery/unavailable/service_on_grid/
+    service_off_grid/battery_pct_avg at parse time instead of carrying all
+    9 fields per robot per day through the pipeline. Across every site for
+    a multi-week/month window this is the difference between materializing
+    ~9 numeric columns per robot-day and ~1 — meaningfully less memory when
+    _load_for_sites holds every installation's frame at once.
+    """
+    url = f"{BASE_URL}/installations/{installation_id}/robot-state/"
+    params = {"after": date_from_str, "before": date_to_str}
+    results = _fetch_days(url, params)
+
+    rows = []
+    for day_result in results:
+        d = day_result.get("date")
+        robot_states = day_result.get("result", {}).get("robot_states", {})
+        all_robots = []
+        if isinstance(robot_states, dict):
+            for hour_robots in robot_states.values():
+                if isinstance(hour_robots, list):
+                    all_robots.extend(hour_robots)
+        elif isinstance(robot_states, list):
+            all_robots = robot_states
+        for r in all_robots:
+            rows.append({
+                "date": d,
+                "robot_id": r.get("robot_id"),
+                "robot_type": r.get("robot_type", ""),
+                "charging_s": (r.get("charging_available", 0) or 0)
+                              + (r.get("charging_unavailable", 0) or 0),
+            })
+
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return df
+
+
+@st.cache_data(ttl=86400, persist="disk", max_entries=_CACHE_MAX_ENTRIES)
 def query_robot_state_per_robot(installation_id, date_from_str, date_to_str):
     """Per (date, robot) uptime metrics for a single installation.
 

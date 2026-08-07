@@ -27,7 +27,8 @@ _FETCH_SEMAPHORE = threading.BoundedSemaphore(_MAX_CONCURRENT_FETCHES)
 from cubeanalytics_utils import (
     is_api_configured, get_installations,
     query_system_health, query_uptime, query_system_mode_periods,
-    query_robot_state, query_robot_state_per_robot, query_robot_movement, query_bin_presentations,
+    query_robot_state, query_robot_state_per_robot, query_robot_charging_per_robot,
+    query_robot_movement, query_bin_presentations,
     query_port_wait_time_daily, query_port_uptime, query_port_uptime_per_port,
     query_incidents, query_robot_errors,
     query_recovery_times, query_installation_data, query_module_versions, query_bins_above,
@@ -1787,7 +1788,7 @@ _SYMBOL_CYCLE = ["circle", "diamond", "square", "triangle-up", "cross", "x"]
 def _robot_battery_frame(inst_id, date_from_str, date_to_str):
     """Per-robot avg distance/day (km) and avg charging time/day (min) for one site."""
     df_move = query_robot_movement(inst_id, date_from_str, date_to_str)
-    df_state = query_robot_state_per_robot(inst_id, date_from_str, date_to_str)
+    df_state = query_robot_charging_per_robot(inst_id, date_from_str, date_to_str)
     if df_move.empty or df_state.empty:
         return pd.DataFrame()
 
@@ -1797,11 +1798,9 @@ def _robot_battery_frame(inst_id, date_from_str, date_to_str):
     )
     state_g = df_state.groupby("robot_id", as_index=False).agg(
         robot_type=("robot_type", "last"),
-        charging_s_total=("charging_available", "sum"),
-        charging_unavail_s_total=("charging_unavailable", "sum"),
+        charging_s_total=("charging_s", "sum"),
         days_state=("date", "nunique"),
     )
-    state_g["charging_s_total"] = state_g["charging_s_total"] + state_g["charging_unavail_s_total"]
 
     g = move_g.merge(state_g, on="robot_id", how="inner")
     if g.empty:
