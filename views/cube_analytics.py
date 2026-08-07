@@ -1931,8 +1931,8 @@ def _view_robot_batteries(date_from_str, date_to_str, aggregation):
         height=560, margin=dict(l=10, r=10, t=10, b=10),
         plot_bgcolor="white", legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
-    fig.update_xaxes(showgrid=True, gridcolor="#eee")
-    fig.update_yaxes(showgrid=True, gridcolor="#eee")
+    fig.update_xaxes(showgrid=True, gridcolor="#eee", rangemode="tozero")
+    fig.update_yaxes(showgrid=True, gridcolor="#eee", rangemode="tozero")
     st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
